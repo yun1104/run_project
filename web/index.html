@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>AI 外卖助手</title>
+  <link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">AI 外卖助手</div>
+      <button id="newChatBtn" class="new-chat">+ 新建会话</button>
+      <div id="sessionList" class="session-list"></div>
+    </aside>
+
+    <main class="chat-area">
+      <header class="chat-header">今天想吃点什么？</header>
+      <section id="messageList" class="message-list"></section>
+      <footer class="chat-input-wrap">
+        <textarea id="promptInput" placeholder="输入你的需求，例如：预算30元以内，想吃辣，30分钟内送达"></textarea>
+        <button id="sendBtn">发送</button>
+      </footer>
+    </main>
+  </div>
+
+  <div id="authModal" class="pref-modal hidden">
+    <div class="pref-panel">
+      <h3>登录后使用</h3>
+      <div class="pref-options" style="grid-template-columns: 1fr;">
+        <input id="authUsername" class="auth-input" placeholder="用户名" />
+        <input id="authPassword" class="auth-input" type="password" placeholder="密码(至少6位)" />
+      </div>
+      <div class="pref-actions">
+        <button id="authRegisterBtn" class="ghost-btn">去注册</button>
+        <button id="authLoginBtn">登录</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="registerModal" class="pref-modal hidden">
+    <div class="pref-panel">
+      <h3>注册账号</h3>
+      <div class="pref-options" style="grid-template-columns: 1fr;">
+        <input id="regUsername" class="auth-input" placeholder="用户名" />
+        <input id="regPassword" class="auth-input" type="password" placeholder="密码(至少6位)" />
+        <input id="regPassword2" class="auth-input" type="password" placeholder="再次输入密码" />
+      </div>
+      <div class="pref-actions">
+        <button id="regBackBtn" class="ghost-btn">返回登录</button>
+        <button id="regSubmitBtn">提交注册</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="prefModal" class="pref-modal hidden">
+    <div class="pref-panel">
+      <h3>首次使用，请先完成饮食偏好问卷</h3>
+      <div id="prefQuestion" class="pref-question"></div>
+      <div id="prefOptions" class="pref-options"></div>
+      <div class="pref-actions">
+        <button id="prefPrevBtn" class="ghost-btn">上一步</button>
+        <button id="prefNextBtn">下一步</button>
+      </div>
+    </div>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>

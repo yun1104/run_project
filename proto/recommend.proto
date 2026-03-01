@@ -1,0 +1,32 @@
+syntax = "proto3";
+
+package recommend;
+
+option go_package = "meituan-ai-agent/proto/recommend";
+
+service RecommendService {
+  rpc GetRecommendations(RecommendRequest) returns (RecommendResponse);
+}
+
+message RecommendRequest {
+  int64 user_id = 1;
+  string requirement = 2;
+  string location = 3;
+}
+
+message RecommendResponse {
+  repeated MerchantRecommend merchants = 1;
+}
+
+message MerchantRecommend {
+  int64 merchant_id = 1;
+  string name = 2;
+  string category = 3;
+  double rating = 4;
+  double avg_price = 5;
+  string distance = 6;
+  int32 delivery_time = 7;
+  repeated string tags = 8;
+  string reason = 9;
+  double score = 10;
+}

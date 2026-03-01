@@ -1,0 +1,14 @@
+{
+  "user_id": 1,
+  "spicy_level": "微辣",
+  "budget_range": "20-40元",
+  "cuisine_likes": [
+    "川菜"
+  ],
+  "avoid_foods": [
+    "无"
+  ],
+  "diet_goal": "随意吃",
+  "dining_time": "早餐",
+  "updated_at": "2026-02-27T21:12:45+08:00"
+}

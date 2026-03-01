@@ -1,0 +1,61 @@
+syntax = "proto3";
+
+package user;
+
+option go_package = "meituan-ai-agent/proto/user";
+
+service UserService {
+  rpc GetPreference(GetPreferenceRequest) returns (PreferenceResponse);
+  rpc UpdatePreference(UpdatePreferenceRequest) returns (Response);
+  rpc Register(RegisterRequest) returns (Response);
+  rpc Login(LoginRequest) returns (LoginResponse);
+}
+
+message GetPreferenceRequest {
+  int64 user_id = 1;
+}
+
+message PreferenceResponse {
+  int64 user_id = 1;
+  repeated string categories = 2;
+  string price_range = 3;
+  repeated string tastes = 4;
+  repeated int64 merchants = 5;
+  repeated string dish_keywords = 6;
+  repeated string avoid_foods = 7;
+  repeated int32 order_times = 8;
+}
+
+message UpdatePreferenceRequest {
+  int64 user_id = 1;
+  repeated string categories = 2;
+  string price_range = 3;
+  repeated string tastes = 4;
+  repeated int64 merchants = 5;
+  repeated string dish_keywords = 6;
+  repeated string avoid_foods = 7;
+  repeated int32 order_times = 8;
+}
+
+message RegisterRequest {
+  string username = 1;
+  string password = 2;
+  string phone = 3;
+}
+
+message LoginRequest {
+  string username = 1;
+  string password = 2;
+}
+
+message LoginResponse {
+  int32 code = 1;
+  string message = 2;
+  string token = 3;
+  int64 user_id = 4;
+}
+
+message Response {
+  int32 code = 1;
+  string message = 2;
+}
