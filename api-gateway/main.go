@@ -7,12 +7,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	"log"
 	"meituan-ai-agent/pkg/cache"
 	"meituan-ai-agent/pkg/database"
-	"log"
 	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
@@ -107,7 +108,7 @@ func main() {
 	go startUDPServer(udpAddr)
 
 	r := gin.Default()
-	
+
 	r.Use(RateLimitMiddleware())
 	if allowedHost != "" {
 		r.Use(HostLimitMiddleware(allowedHost))
@@ -116,19 +117,23 @@ func main() {
 	r.GET("/", func(c *gin.Context) {
 		c.File("./web/index.html")
 	})
-	
+	r.GET("/account", func(c *gin.Context) {
+		c.File("./web/account.html")
+	})
+
 	api := r.Group("/api/v1")
 	{
 		user := api.Group("/user")
 		{
 			user.POST("/register", Register)
 			user.POST("/login", Login)
+			user.PUT("/password", ChangePassword)
 			user.GET("/me", GetMe)
 			user.GET("/preference", GetPreference)
 			user.PUT("/preference", UpdatePreference)
 			user.GET("/preference/questions", GetPreferenceQuestions)
 		}
-		
+
 		order := api.Group("/order")
 		{
 			order.GET("/list", GetOrders)
@@ -136,7 +141,7 @@ func main() {
 			order.GET("/detail", GetOrderDetail)
 			order.POST("/auto-place-pay", AutoPlaceAndPay)
 		}
-		
+
 		recommend := api.Group("/recommend")
 		{
 			recommend.POST("/get", GetRecommendations)
@@ -161,7 +166,7 @@ func main() {
 			})
 		}
 	}
-	
+
 	if err := r.Run(httpAddr); err != nil {
 		log.Fatal(err)
 	}
@@ -255,12 +260,68 @@ func Login(c *gin.Context) {
 		_ = cache.Set(c.Request.Context(), fmt.Sprintf("session:token:%s", token), account.UserID, sessionTTL)
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"token":   token,
-		"user_id": account.UserID,
+		"code":     0,
+		"message":  "success",
+		"token":    token,
+		"user_id":  account.UserID,
 		"username": account.Username,
 	})
+}
+
+func ChangePassword(c *gin.Context) {
+	userID, ok := mustAuthUserID(c)
+	if !ok {
+		return
+	}
+	type changePasswordRequest struct {
+		OldPassword string `json:"old_password"`
+		NewPassword string `json:"new_password"`
+	}
+	var req changePasswordRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid request"})
+		return
+	}
+	req.OldPassword = strings.TrimSpace(req.OldPassword)
+	req.NewPassword = strings.TrimSpace(req.NewPassword)
+	if len(req.NewPassword) < 6 {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "new password too short"})
+		return
+	}
+
+	db := database.GetDBByIndex(0)
+	if db == nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "db not ready"})
+		return
+	}
+
+	var acc UserAccount
+	if err := db.Where("id = ?", userID).First(&acc).Error; err != nil {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "user not found"})
+		return
+	}
+	if acc.PasswordHash != hashPassword(req.OldPassword) {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "旧密码不对"})
+		return
+	}
+
+	newHash := hashPassword(req.NewPassword)
+	if newHash == acc.PasswordHash {
+		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "new password must differ"})
+		return
+	}
+	if err := db.Model(&UserAccount{}).Where("id = ?", userID).Update("password_hash", newHash).Error; err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "update password failed"})
+		return
+	}
+
+	if redisReady {
+		acc.PasswordHash = newHash
+		ctx := c.Request.Context()
+		_ = cache.Set(ctx, fmt.Sprintf("user:acct:id:%d", acc.UserID), acc, prefCacheTTL)
+		_ = cache.Set(ctx, fmt.Sprintf("user:acct:uname:%s", acc.Username), acc, prefCacheTTL)
+	}
+	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success"})
 }
 
 func GetMe(c *gin.Context) {
@@ -505,6 +566,29 @@ type ChatRequest struct {
 	Requirement string `json:"requirement"`
 }
 
+type llmRecommendResult struct {
+	Reply     string                 `json:"reply"`
+	Merchants []llmRecommendMerchant `json:"merchants"`
+}
+
+type llmRecommendMerchant struct {
+	ID     int64  `json:"id"`
+	Reason string `json:"reason"`
+}
+
+type llmChatResultRaw struct {
+	IsOrderIntent bool                     `json:"is_order_intent"`
+	Reply         string                   `json:"reply"`
+	Merchants     []map[string]interface{} `json:"merchants"`
+}
+
+type llmPythonInput struct {
+	Requirement string         `json:"requirement"`
+	HasPref     bool           `json:"has_pref"`
+	Preference  UserPreference `json:"preference"`
+	Candidates  []Merchant     `json:"candidates"`
+}
+
 func ChatSend(c *gin.Context) {
 	authUserID, ok := mustAuthUserID(c)
 	if !ok {
@@ -515,17 +599,35 @@ func ChatSend(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid request"})
 		return
 	}
+	req.Requirement = strings.TrimSpace(req.Requirement)
 
 	reply := "已收到你的需求，正在为你推荐外卖。"
-	if strings.TrimSpace(req.Requirement) != "" {
+	if req.Requirement != "" {
 		reply = "根据你的需求“" + req.Requirement + "”，为你推荐以下商家。"
 	}
 	req.UserID = authUserID
+	var pref UserPreference
+	hasPref := false
 	if pref, ok := fetchPreference(c.Request.Context(), req.UserID); ok {
 		reply += "（已结合你的偏好：" + pref.SpicyLevel + " / " + pref.BudgetRange + "）"
+		hasPref = true
 	}
 
 	merchants := recommendByRequirement(req.Requirement)
+	if llmReply, llmMerchants, isOrder, err := recommendByModelScope(c.Request.Context(), req.Requirement, pref, hasPref, merchants); err == nil {
+		if strings.TrimSpace(llmReply) != "" {
+			reply = llmReply
+		}
+		if isOrder {
+			if len(llmMerchants) > 0 {
+				merchants = llmMerchants
+			}
+		} else {
+			merchants = []Merchant{}
+		}
+	} else {
+		log.Printf("modelscope fallback: %v", err)
+	}
 
 	c.JSON(http.StatusOK, gin.H{
 		"code":    0,
@@ -555,6 +657,79 @@ func recommendByRequirement(requirement string) []Merchant {
 		{ID: 10001, Name: "鲜香牛肉饭", Category: "快餐", Rating: 4.6, AvgPrice: 29, DeliveryTime: 22, Reason: "高复购商家，配送速度快"},
 		{ID: 10002, Name: "家常木桶饭", Category: "快餐", Rating: 4.5, AvgPrice: 26, DeliveryTime: 25, Reason: "性价比高，出餐快"},
 	}
+}
+
+func recommendByModelScope(ctx context.Context, requirement string, pref UserPreference, hasPref bool, candidates []Merchant) (string, []Merchant, bool, error) {
+	input := llmPythonInput{
+		Requirement: requirement,
+		HasPref:     hasPref,
+		Preference:  pref,
+		Candidates:  candidates,
+	}
+	inputBytes, _ := json.Marshal(input)
+
+	pythonCmd, pythonArgs := resolvePythonCommand()
+	if pythonCmd == "" {
+		return "", nil, false, fmt.Errorf("python runtime not found")
+	}
+	cmd := exec.CommandContext(ctx, pythonCmd, pythonArgs...)
+	cmd.Dir = "."
+	cmd.Stdin = strings.NewReader(string(inputBytes))
+	output, err := cmd.Output()
+	if err != nil {
+		return "", nil, false, err
+	}
+
+	var outRaw llmChatResultRaw
+	if err := json.Unmarshal(output, &outRaw); err != nil {
+		return "", nil, false, err
+	}
+	if !outRaw.IsOrderIntent {
+		return outRaw.Reply, []Merchant{}, false, nil
+	}
+	if len(outRaw.Merchants) == 0 {
+		return outRaw.Reply, nil, true, nil
+	}
+
+	idMap := map[int64]Merchant{}
+	for _, c := range candidates {
+		idMap[c.ID] = c
+	}
+	finalMerchants := make([]Merchant, 0, len(outRaw.Merchants))
+	for _, item := range outRaw.Merchants {
+		rawID, okID := item["id"]
+		if !okID {
+			continue
+		}
+		var id int64
+		switch v := rawID.(type) {
+		case float64:
+			id = int64(v)
+		case string:
+			id, _ = strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+		default:
+			continue
+		}
+		if base, ok := idMap[id]; ok {
+			reason, _ := item["reason"].(string)
+			m := llmRecommendMerchant{ID: id, Reason: reason}
+			if strings.TrimSpace(m.Reason) != "" {
+				base.Reason = m.Reason
+			}
+			finalMerchants = append(finalMerchants, base)
+		}
+	}
+	return outRaw.Reply, finalMerchants, true, nil
+}
+
+func resolvePythonCommand() (string, []string) {
+	if _, err := exec.LookPath("python"); err == nil {
+		return "python", []string{"scripts/llm_recommend.py"}
+	}
+	if _, err := exec.LookPath("py"); err == nil {
+		return "py", []string{"-3", "scripts/llm_recommend.py"}
+	}
+	return "", nil
 }
 
 func AutoPlaceAndPay(c *gin.Context) {

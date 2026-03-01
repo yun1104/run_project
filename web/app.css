@@ -40,6 +40,16 @@ html, body {
   cursor: pointer;
 }
 
+.new-chat.secondary {
+  margin-top: 8px;
+  background: #0b1220;
+}
+
+.new-chat.secondary.danger {
+  background: #3b0b0b;
+  border-color: #7f1d1d;
+}
+
 .session-list {
   margin-top: 14px;
   display: flex;
@@ -79,23 +89,94 @@ html, body {
   padding: 16px;
 }
 
+.message-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  margin-bottom: 10px;
+}
+
+.message-row.user {
+  justify-content: flex-end;
+}
+
+.message-row.assistant {
+  justify-content: flex-start;
+}
+
+.message-stack {
+  display: flex;
+  flex-direction: column;
+}
+
+.message-stack.user {
+  align-items: flex-end;
+}
+
+.message-stack.assistant {
+  align-items: flex-start;
+}
+
+.message-meta {
+  font-size: 12px;
+  color: #6b7280;
+  margin-bottom: 4px;
+  padding: 0 2px;
+}
+
+.avatar {
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 12px;
+  font-weight: 700;
+  flex-shrink: 0;
+}
+
+.avatar.user {
+  background: #2563eb;
+  color: #fff;
+}
+
+.avatar.assistant {
+  background: #0f172a;
+  color: #e5e7eb;
+}
+
 .message {
-  max-width: 80%;
+  width: auto;
+  display: inline-block;
+  max-width: min(80%, 720px);
   border-radius: 12px;
   padding: 12px;
   line-height: 1.6;
-  margin-bottom: 10px;
   white-space: pre-wrap;
+  word-break: break-word;
+  overflow-wrap: anywhere;
+}
+
+.message.single-line {
+  white-space: nowrap;
+  min-width: max-content;
+}
+
+.message-meta.user {
+  text-align: right;
+}
+
+.message-meta.assistant {
+  text-align: left;
 }
 
 .message.user {
-  margin-left: auto;
   background: #2563eb;
   color: #fff;
 }
 
 .message.assistant {
-  margin-right: auto;
   background: #fff;
   border: 1px solid #e5e7eb;
 }
@@ -255,6 +336,115 @@ html, body {
   color: #fff;
   background: #111827;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+}
+
+.account-wrap {
+  max-width: 900px;
+  margin: 0 auto;
+  width: 100%;
+}
+
+.account-main {
+  max-width: none;
+  margin: 0;
+}
+
+.account-card {
+  background: #fff;
+  border: 1px solid #e5e7eb;
+  border-radius: 12px;
+  padding: 16px;
+  margin-bottom: 14px;
+}
+
+.account-card h3 {
+  margin: 0 0 10px;
+  font-size: 18px;
+}
+
+.account-line {
+  margin: 10px 0;
+  color: #334155;
+  font-size: 14px;
+}
+
+.account-form {
+  display: grid;
+  gap: 10px;
+}
+
+.account-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.mt12 {
+  margin-top: 12px;
+}
+
+.primary-btn {
+  border: none;
+  border-radius: 10px;
+  background: #2563eb;
+  color: #fff;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+
+.danger-btn {
+  border: none;
+  border-radius: 10px;
+  background: #dc2626;
+  color: #fff;
+  padding: 9px 14px;
+  cursor: pointer;
+}
+
+.question-list {
+  display: grid;
+  gap: 12px;
+}
+
+.question-card {
+  border: 1px solid #e5e7eb;
+  border-radius: 10px;
+  padding: 10px;
+  background: #f8fafc;
+}
+
+.question-title {
+  margin-bottom: 8px;
+  font-weight: 600;
+}
+
+.question-options {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.question-option {
+  border: 1px solid #d1d5db;
+  background: #fff;
+  border-radius: 8px;
+  padding: 8px;
+  text-align: left;
+  cursor: pointer;
+}
+
+.question-option.active {
+  border-color: #2563eb;
+  background: #eff6ff;
+}
+
+@media (max-width: 900px) {
+  .account-main .chat-header {
+    font-size: 22px;
+  }
+  .question-options {
+    grid-template-columns: 1fr;
+  }
 }
 
 .toast.success {

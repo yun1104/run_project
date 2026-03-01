@@ -2,6 +2,7 @@ const messageList = document.getElementById("messageList");
 const promptInput = document.getElementById("promptInput");
 const sendBtn = document.getElementById("sendBtn");
 const newChatBtn = document.getElementById("newChatBtn");
+const accountBtn = document.getElementById("accountBtn");
 const sessionList = document.getElementById("sessionList");
 const prefModal = document.getElementById("prefModal");
 const prefQuestion = document.getElementById("prefQuestion");
@@ -25,7 +26,7 @@ let sessions = [];
 let currentSessionId = null;
 let token = localStorage.getItem("token") || "";
 let userId = Number(localStorage.getItem("user_id") || 0);
-let username = localStorage.getItem("username") || "";
+let username = normalizeDisplayName(localStorage.getItem("username") || "");
 let prefQuestions = [];
 let prefStep = 0;
 let prefAnswers = {
@@ -36,6 +37,17 @@ let prefAnswers = {
   diet_goal: "",
   dining_time: "",
 };
+
+function normalizeDisplayName(name) {
+  return String(name || "").replace(/[\r\n\t]/g, "").trim();
+}
+
+function shouldKeepSingleLine(text) {
+  const t = String(text || "").trim();
+  if (!t) return false;
+  if (/[\r\n]/.test(t)) return false;
+  return t.length <= 24;
+}
 
 function createSession(title = "新会话") {
   const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
@@ -67,7 +79,8 @@ function renderSessions() {
 function appendMessage(role, text) {
   const session = getCurrentSession();
   if (!session) return;
-  session.messages.push({ role, text });
+  const safeText = String(text ?? "").replace(/[\r\n]+/g, " ").trim();
+  session.messages.push({ role, text: safeText });
   renderMessages();
 }
 
@@ -134,10 +147,41 @@ function renderMessages() {
   messageList.innerHTML = "";
   if (!session) return;
   session.messages.forEach((m) => {
-    const div = document.createElement("div");
-    div.className = `message ${m.role}`;
-    div.textContent = m.text;
-    messageList.appendChild(div);
+    const row = document.createElement("div");
+    row.className = `message-row ${m.role}`;
+
+    const avatar = document.createElement("div");
+    avatar.className = `avatar ${m.role}`;
+    if (m.role === "assistant") {
+      avatar.textContent = "AI";
+    } else {
+      avatar.textContent = username ? username.slice(0, 1).toUpperCase() : "我";
+    }
+
+    const stack = document.createElement("div");
+    stack.className = `message-stack ${m.role}`;
+
+    const meta = document.createElement("div");
+    meta.className = `message-meta ${m.role}`;
+    meta.textContent = m.role === "assistant" ? "外卖助手" : (normalizeDisplayName(username) || "我");
+
+    const bubble = document.createElement("div");
+    bubble.className = `message ${m.role}`;
+    bubble.textContent = m.text;
+    if (shouldKeepSingleLine(m.text)) {
+      bubble.classList.add("single-line");
+    }
+    stack.appendChild(meta);
+    stack.appendChild(bubble);
+
+    if (m.role === "user") {
+      row.appendChild(stack);
+      row.appendChild(avatar);
+    } else {
+      row.appendChild(avatar);
+      row.appendChild(stack);
+    }
+    messageList.appendChild(row);
   });
   messageList.scrollTop = messageList.scrollHeight;
 }
@@ -174,6 +218,11 @@ promptInput.addEventListener("keydown", (e) => {
   }
 });
 newChatBtn.onclick = () => createSession();
+if (accountBtn) {
+  accountBtn.onclick = () => {
+    window.location.href = "/assets/account.html";
+  };
+}
 
 createSession("默认会话");
 appendMessage("assistant", "你好，我是你的外卖助手。告诉我预算、口味、时间，我来推荐。");
@@ -188,7 +237,7 @@ function authHeaders() {
 function setAuth(data) {
   token = data.token;
   userId = Number(data.user_id);
-  username = data.username || "";
+  username = normalizeDisplayName(data.username || "");
   localStorage.setItem("token", token);
   localStorage.setItem("user_id", String(userId));
   localStorage.setItem("username", username);
@@ -218,7 +267,10 @@ async function doRegister() {
   const u = regUsername.value.trim();
   const p = regPassword.value;
   const p2 = regPassword2.value;
-  if (!u || !p) return;
+  if (!u || !p || !p2) {
+    showToast("请完整填写注册信息", "error");
+    return;
+  }
   if (p.length < 6) {
     showToast("密码至少6位", "error");
     return;
@@ -387,7 +439,7 @@ async function initApp() {
     authModal.classList.remove("hidden");
     return;
   }
-  username = meData.data.username;
+  username = normalizeDisplayName(meData.data.username);
   appendMessage("assistant", `欢迎回来，${username}。`);
   await initPreferenceOnFirstUse();
 }

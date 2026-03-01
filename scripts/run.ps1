@@ -7,10 +7,13 @@ param(
   [string]$MySQLHost = "127.0.0.1",
   [int]$MySQLPort = 3306,
   [string]$MySQLUser = "root",
-  [string]$MySQLPassword = "root",
+  [string]$MySQLPassword = "123456",
   [string]$MySQLDB = "meituan_db_0",
   [string]$RedisAddrs = "127.0.0.1:6379",
-  [string]$RedisPassword = ""
+  [string]$RedisPassword = "",
+  [string]$ModelScopeToken = "",
+  [string]$ModelScopeBaseUrl = "https://api-inference.modelscope.cn/v1",
+  [string]$ModelScopeModel = "Qwen/Qwen3-30B-A3B-Instruct-2507"
 )
 
 $ErrorActionPreference = "Stop"
@@ -22,6 +25,7 @@ $goExe = Join-Path $toolsDir "go\bin\go.exe"
 $logOut = Join-Path $runtimeDir "gateway.out.log"
 $logErr = Join-Path $runtimeDir "gateway.err.log"
 $pidFile = Join-Path $runtimeDir "gateway.pid"
+$stopScript = Join-Path $projectRoot "scripts\stop.ps1"
 
 New-Item -ItemType Directory -Force -Path $runtimeDir | Out-Null
 New-Item -ItemType Directory -Force -Path $toolsDir | Out-Null
@@ -67,6 +71,53 @@ function Stop-OldGateway {
   }
 }
 
+function Stop-PortOwners {
+  param(
+    [int[]]$Ports
+  )
+  $pidSet = @{}
+  foreach ($port in $Ports) {
+    try {
+      $tcpLines = cmd /c "netstat -ano -p tcp | findstr :$port"
+      foreach ($line in $tcpLines) {
+        if ($line -match "LISTENING\s+(\d+)$") {
+          $pidSet[$matches[1]] = $true
+        }
+      }
+    } catch {
+    }
+    try {
+      $udpLines = cmd /c "netstat -ano -p udp | findstr :$port"
+      foreach ($line in $udpLines) {
+        if ($line -match "\s(\d+)$") {
+          $pidSet[$matches[1]] = $true
+        }
+      }
+    } catch {
+    }
+  }
+  foreach ($procId in $pidSet.Keys) {
+    if ($procId -and $procId -ne "0") {
+      try {
+        Stop-Process -Id ([int]$procId) -Force -ErrorAction Stop
+        Write-Host "已清理占用端口进程 PID=$procId"
+      } catch {
+      }
+    }
+  }
+}
+
+function Stop-BeforeRun {
+  if (Test-Path $stopScript) {
+    try {
+      & powershell -ExecutionPolicy Bypass -File $stopScript | Out-Null
+    } catch {
+    }
+  }
+  Stop-OldGateway
+  Stop-PortOwners -Ports @($HttpPort, $TcpPort, $UdpPort)
+}
+
 function Wait-HttpReady {
   param(
     [string]$Url,
@@ -108,7 +159,7 @@ function Run-SmokeTests {
   }
   $headers = @{ "Authorization" = "Bearer $($loginResp.token)"; "Content-Type" = "application/json" }
 
-  $chatBody = @{ requirement = "预算30，想吃辣，30分钟内送达" } | ConvertTo-Json
+  $chatBody = @{ requirement = "spicy food under 30, deliver within 30 minutes" } | ConvertTo-Json
   $chatResp = Invoke-RestMethod -Uri "$base/api/v1/chat/send" -Method POST -Headers $headers -Body $chatBody
   if ($chatResp.code -ne 0) {
     throw "chat/send 自测失败"
@@ -170,7 +221,7 @@ function Run-SmokeTests {
 }
 
 Ensure-Go
-Stop-OldGateway
+Stop-BeforeRun
 
 $env:Path = (Join-Path $toolsDir "go\bin") + ";" + $env:Path
 $env:GOPROXY = "https://goproxy.cn,direct"
@@ -188,6 +239,13 @@ try {
   $env:MYSQL_DB = $MySQLDB
   $env:REDIS_ADDRS = $RedisAddrs
   $env:REDIS_PASSWORD = $RedisPassword
+  if ([string]::IsNullOrWhiteSpace($ModelScopeToken)) {
+    Remove-Item Env:MODELSCOPE_API_KEY -ErrorAction SilentlyContinue
+  } else {
+    $env:MODELSCOPE_API_KEY = $ModelScopeToken
+  }
+  $env:MODELSCOPE_BASE_URL = $ModelScopeBaseUrl
+  $env:MODELSCOPE_MODEL = $ModelScopeModel
   if ([string]::IsNullOrWhiteSpace($Domain)) {
     Remove-Item Env:ALLOWED_HOST -ErrorAction SilentlyContinue
   } else {
@@ -200,7 +258,7 @@ try {
   }
 
   Write-Host "启动网关..."
-  $proc = Start-Process -FilePath $goExe -ArgumentList "run", "./api-gateway" -WorkingDirectory $projectRoot -RedirectStandardOutput $logOut -RedirectStandardError $logErr -PassThru
+  $proc = Start-Process -FilePath $goExe -ArgumentList "run", "./api-gateway/main.go" -WorkingDirectory $projectRoot -RedirectStandardOutput $logOut -RedirectStandardError $logErr -WindowStyle Hidden -PassThru
   Set-Content -Path $pidFile -Value $proc.Id
 
   $ready = Wait-HttpReady -Url "http://127.0.0.1:$HttpPort/"
@@ -210,7 +268,7 @@ try {
 
   Run-SmokeTests -HttpPort $HttpPort -TcpPort $TcpPort -UdpPort $UdpPort
   if ($OpenBrowser) {
-    Start-Process "http://127.0.0.1:$HttpPort/"
+    Start-Process -FilePath "explorer.exe" -ArgumentList "http://127.0.0.1:$HttpPort/"
   }
   Write-Host "系统已启动：http://127.0.0.1:$HttpPort/"
   if (-not [string]::IsNullOrWhiteSpace($Domain)) {
