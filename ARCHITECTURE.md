@@ -1,7 +1,8 @@
-# AI外卖推荐Agent系统架构设计
+# 想吃啥 - 系统架构设计
 
 ## 技术栈
 
+- **项目名称**: 想吃啥（xiangchisha）
 - **后端框架**: Go 1.21+ + Gin
 - **数据库**: MySQL 8.0(分库分表) + Redis Cluster
 - **消息队列**: Kafka

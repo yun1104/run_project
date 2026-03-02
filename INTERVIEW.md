@@ -1,271 +1,434 @@
 # 面试要点
 
+> 本文档基于实际代码，区分"已落地实现"与"架构设计"两个层面，面试时按实际情况作答。
+
+---
+
 ## 项目介绍
 
-基于Go语言开发的百万级高并发AI外卖推荐系统，采用微服务架构，支持智能偏好分析和自动下单。
+**项目名称**：想吃啥（xiangchisha）
 
-**核心功能**�?
-1. 用户偏好管理：分析历史订单提取饮食偏�?
-2. 智能推荐：多路召�?+AI排序
-3. 自动下单：爬虫自动化下单和支�?
+基于 Go 语言开发的 AI 外卖推荐助手，支持聊天式自然语言交互、用户偏好管理与自动下单。
 
-**技术亮�?**�?
-- 微服务架构：8个服务，gRPC通信
-- 分库分表�?10�?100表，支持亿级数据
-- 三级缓存：本�?+Redis Cluster+MySQL
-- 消息驱动：Kafka异步解�?
-- 服务治理：限流、熔断、降�?
+**实际运行形态**：单网关应用（api-gateway/main.go），同时监听 HTTP(8080)、TCP(9091)、UDP(9092) 三种协议。
 
-## 并发安全问题
+**核心功能（已落地）**：
+1. 用户注册/登录，偏好问卷录入，MySQL 持久化 + Redis 缓存
+2. 聊天接口接收自然语言需求，规则引擎兜底 + ModelScope 大模型排序
+3. 自动下单支付（当前内存模拟，订单结构完整）
 
-### 1. 如何保证订单不重复创建？
+**架构设计（代码骨架已写，主流程待接通）**：
+- 8 个微服务拆分，gRPC + protobuf 协议定义
+- Kafka 三个 Topic 异步解耦
+- 分库分表：10 库 100 表（`GetDB(userID)` 按 userID 取模已实现）
+- 完整服务治理：限流、熔断、降级、Prometheus、Jaeger
 
-**三重保障**：
-- 分布式锁：Redis SetNX防止并发创建
-- 唯一索引：DB层user_id+merchant_id+时间唯一约束
-- 幂等性：订单号预生成，重复请求返回相同结�?
+---
 
-### 2. 高并发下如何防止库存超卖�?
+## 一、已实现模块逐一解析
 
-**乐观锁方�?**�?
+### 1. 认证模块
+
+**token 生成**（非 JWT，是自定义格式）：
+```go
+token := fmt.Sprintf("u%d-%d", account.UserID, time.Now().UnixNano())
+```
+
+**token 验证**（两级查找）：
+```go
+// 优先 Redis（TTL 72h）
+cache.Get(ctx, "session:token:"+token, &uid)
+// 降级：内存 sessions map
+storeMu.RLock()
+userID, ok := sessions[token]
+```
+
+**密码加盐 Hash**：
+```go
+sha256(password + "::mt-agent")  // 固定盐，hex 编码
+```
+
+**面试答法**：token 采用自定义格式存储在内存 map 和 Redis 双副本，Redis 不可用自动降级到内存。
+若追问 JWT：能说清楚 Header.Payload.Signature 结构和无状态验证原理即可。
+
+---
+
+### 2. 偏好缓存（两级缓存，真实代码）
+
+```
+读偏好：Redis(user:pref:{uid}) → miss → MySQL → 回写 Redis(TTL 24h)
+写偏好：upsert MySQL → 更新 Redis 缓存
+读账户：Redis(user:acct:id:{uid}) → miss → MySQL → 双 key 回写（id + username）
+```
+
+**关键实现**（`pkg/cache/redis.go`）：
+- `redis.UniversalClient`：自动适配单机/集群，连接池 100 连接、20 最小空闲
+- 值序列化：JSON Marshal/Unmarshal，不依赖 Redis 特定类型
+
+---
+
+### 3. 并发安全的订单存储
+
+```go
+var (
+    storeMu  sync.RWMutex
+    orderSeq int64 = 1000
+    orderStore = map[int64]Order{}
+)
+
+// 写：独占锁
+storeMu.Lock()
+orderSeq++
+orderStore[order.OrderID] = order
+storeMu.Unlock()
+
+// 读：共享锁
+storeMu.RLock()
+defer storeMu.RUnlock()
+```
+
+**面试答法**：订单当前存内存，用 RWMutex 保证并发安全，读多写少场景下 RWMutex 比 Mutex 性能更好——多个 goroutine 可同时持有读锁，写锁独占。
+
+---
+
+### 4. 限流中间件（`pkg/middleware/ratelimit.go`）
+
+实现的是**滑动窗口**算法（按 IP 计数）：
+
+```go
+type RateLimiter struct {
+    requests map[string]*RequestInfo  // IP → 计数
+    mu       sync.Mutex
+    rate     int           // 窗口内最大请求数
+    window   time.Duration // 窗口时长
+}
+
+// 核心逻辑：窗口过期则重置，未过期则累加判断
+if !exists || now.After(info.resetTime) {
+    rl.requests[ip] = &RequestInfo{count: 1, resetTime: now.Add(rl.window)}
+} else if info.count >= rl.rate {
+    返回 429
+}
+```
+
+**面试答法**：当前实现基于滑动窗口，按 IP 在固定时间窗口内计数。若追问令牌桶区别：令牌桶允许突发流量（桶内有积累的 token），滑动窗口更严格、更均匀。
+
+---
+
+### 5. 熔断器（`pkg/middleware/circuit_breaker.go`）
+
+三态状态机，实际代码：
+
+```go
+状态：Closed(正常) → Open(熔断) → HalfOpen(试探)
+
+触发条件：连续失败 5 次 → Open，冻结 30s
+恢复条件：30s 后进入 HalfOpen，连续成功 3 次 → Closed
+
+核心方法：
+cb.Execute(fn func() error) error
+// Open 状态直接返回 ErrOpenState，不执行 fn
+// 执行后更新计数，驱动状态转换
+```
+
+**面试答法**：熔断器防止雪崩，本项目连续失败 5 次熔断 30s，期间直接返回错误不调用下游，30s 后半开放一个探测请求，成功则恢复。AI 调用超时时降级返回规则推荐结果。
+
+---
+
+### 6. 分布式锁（`pkg/lock/distributed_lock.go`）
+
+```go
+// 加锁：SetNX 原子操作，TTL 防死锁
+ok, err := client.SetNX(ctx, key, value, ttl).Result()
+
+// 解锁：Lua 脚本保证原子性，防误删他人的锁
+script := `
+    if redis.call("get", KEYS[1]) == ARGV[1] then
+        return redis.call("del", KEYS[1])
+    else
+        return 0
+    end`
+
+// 重试：TryLockWithRetry(ctx, maxRetry=3, interval=100ms)
+```
+
+**要点**：
+- value 用 UUID 区分不同进程，防止 A 的锁被 B 误删
+- TTL 防止持锁进程崩溃导致死锁
+- Lua 脚本：get + del 两步是原子的，防止 get 后 TTL 恰好过期、锁被他人获取、再执行 del 删掉他人锁
+
+---
+
+### 7. LRU 缓存（`pkg/concurrency/lru_cache.go`）
+
+```go
+type LRUCache struct {
+    capacity int
+    cache    map[string]*list.Element  // O(1) 查找
+    lruList  *list.List                // 双向链表 O(1) 移动
+    mu       sync.RWMutex
+}
+// Get：MoveToFront（标记为最近使用）
+// Put：超容量时 Remove(lruList.Back())
+```
+
+**面试答法**：map 提供 O(1) 查找，双向链表维护访问顺序。Get 时移到链表头，Put 满时删链表尾（最久未用）。用 RWMutex 保证并发安全。
+
+---
+
+### 8. Goroutine 池（`pkg/concurrency/pool.go`）
+
+```go
+type WorkerPool struct {
+    workers   int
+    taskQueue chan func()   // 有界 buffered channel
+    wg        sync.WaitGroup
+    ctx       context.Context
+    cancel    context.CancelFunc
+}
+
+// worker 从 taskQueue 消费任务，select 监听 ctx.Done() 优雅退出
+// Submit 非阻塞：队列满时 default 分支返回 false，拒绝任务
+// Stop：close(taskQueue) + cancel() + wg.Wait()
+```
+
+**面试答法**：固定 N 个 worker goroutine 复用，有界队列防止 OOM。Submit 用 select + default 做非阻塞投递，满则拒绝。Stop 优雅关闭：先关队列让 worker 排干，同时 cancel context，WaitGroup 等所有 worker 退出。
+
+---
+
+### 9. AI 推荐（实际调用方式）
+
+```go
+// 通过 exec.CommandContext 调用 Python 脚本
+cmd := exec.CommandContext(ctx, "python", "scripts/llm_recommend.py")
+cmd.Stdin = strings.NewReader(jsonInput)  // 传入候选商家 + 用户偏好
+output, err := cmd.Output()              // 接收 JSON 结果
+```
+
+流程：
+```
+用户请求 → 规则引擎召回候选商家（按关键词） 
+         → 序列化为 JSON 传给 Python 脚本
+         → Python 调用 ModelScope 大模型排序
+         → 返回商家列表 + 自然语言回复
+         → Python 报错则降级用规则召回结果
+```
+
+**面试答法**：AI 层通过 subprocess 调用 Python，隔离 Go 主进程与 Python 依赖。Go 设置 context 超时控制，超时后 kill 子进程，降级返回规则推荐。
+
+---
+
+### 10. MySQL 分库路由（`pkg/database/mysql.go`）
+
+```go
+// 多实例初始化，连接池配置
+sqlDB.SetMaxIdleConns(20)
+sqlDB.SetMaxOpenConns(100)
+sqlDB.SetConnMaxLifetime(time.Hour)
+
+// 按 userID 取模路由到不同库实例
+func GetDB(userID int64) *gorm.DB {
+    index := userID % int64(len(dbInstances))
+    return dbInstances[index]
+}
+```
+
+**当前状态**：主流程通过 `GetDBByIndex(0)` 使用单库，`GetDB(userID)` 实现了分库路由逻辑，扩展时注入多个 Config 即可激活。
+
+---
+
+## 二、高频面试问答
+
+### Q1：如何保证订单不重复创建？
+
+**三重保障**（由浅到深）：
+1. **分布式锁**：`Redis SetNX("order:lock:{uid}:{merchantID}", uuid, 10s)`，防并发创建
+2. **唯一索引**：DB 层 user_id + merchant_id + 时间段联合唯一约束
+3. **幂等性**：订单号预生成，重复请求返回已有订单而不创建新订单
+
+---
+
+### Q2：高并发下如何防止库存超卖？
+
+**方案一：乐观锁（version 字段）**
 ```sql
 UPDATE inventory 
 SET stock = stock - ?, version = version + 1 
 WHERE id = ? AND version = ? AND stock >= ?
 ```
-- version字段防止并发更新
-- 失败重试3�?
-- QPS 10000+
+失败时重试最多 3 次，适合冲突不频繁的场景。
 
-**Redis原子操作**�?
+**方案二：Redis 原子操作**
 ```go
-redis.DecrBy("inventory:123", quantity)
+redis.DecrBy("inventory:123", quantity)  // 单命令原子执行
 ```
-- 性能更高（QPS 50000+�?
-- 定时同步MySQL
-- 异步对账
+性能更高，定时同步 MySQL，需异步对账。
 
-### 3. 遇到过数据竞争问题吗�?
+---
 
-**问题**：统计请求量时直�? `count++`，高并发下数据错�?
+### Q3：缓存穿透/击穿/雪崩怎么处理？
 
-**定位**：`go run -race` 检测数据竞�?
+| 问题 | 本项目方案 |
+|---|---|
+| 穿透（查不存在的 key） | 布隆过滤器预判；查 DB 返回空也缓存空值 |
+| 击穿（热点 key 过期瞬间） | 分布式互斥锁（只允许一个请求回源） |
+| 雪崩（大量 key 同时过期） | TTL 加随机偏移；熔断器保护下游 |
 
-**解决**：atomic原子操作
+**实际代码**：偏好缓存 TTL 24h，账户缓存 TTL 24h，会话 TTL 72h，生产中应加 ±rand(600s) 避免集中过期。
+
+---
+
+### Q4：分库分表如何设计的？
+
+**分库**：`userID % N` 取模路由，`pkg/database/mysql.go` 的 `GetDB(userID)` 已实现路由逻辑。
+
+**分表方案**（`scripts/init_db.sql` 中定义）：
+- `user_preferences_0 ~ 99`：按 userID % 100
+- `orders_202601`：按月 range 分片
+
+**追问：跨分片查询怎么做？**
+- 强制带 userID 查询，路由到单库
+- 运营报表类：引入 ShardingSphere 或异步同步到 OLAP
+
+---
+
+### Q5：熔断器的实现原理？
+
+三状态状态机（代码已实现）：
+```
+Closed（正常）：统计失败次数
+  连续失败 5 次 ↓
+Open（熔断）：直接返回 ErrOpenState，不调用下游
+  冻结 30s 后 ↓
+HalfOpen（半开）：放一个探测请求
+  连续成功 3 次 → Closed
+  失败 → 重回 Open
+```
+
+本项目 AI 调用超时时熔断器触发，降级返回热门规则推荐。
+
+---
+
+### Q6：goroutine 并发控制怎么做的？
+
+**工作池**（`pkg/concurrency/pool.go`）：
+- 固定 N 个 goroutine，有界 buffered channel 作为任务队列
+- Submit 非阻塞（select + default），队列满时返回 false 拒绝
+- Stop 优雅关闭：close channel 排干 + context cancel
+
+**信号量限流**（批量处理场景）：
 ```go
-atomic.AddInt64(&s.requestCount, 1)
-atomic.LoadInt64(&s.requestCount)
+sem := make(chan struct{}, 10)
+sem <- struct{}{}    // 占位
+go func() { defer func() { <-sem }(); doWork() }()
 ```
 
-### 4. 分布式锁如何实现�?
+---
 
-**Redis实现**：
+### Q7：遇到过数据竞争吗？怎么解决的？
+
+**场景**：统计请求数时直接 `count++`，高并发下数据错误。
+
+**定位**：`go run -race main.go` 数据竞争检测器。
+
+**解决方案对比**：
 ```go
-// 加锁：SetNX + TTL
-ok := redis.SetNX(key, value, 10*time.Second)
+// 方案一：atomic（无锁，性能最好，适合计数器）
+atomic.AddInt64(&requestCount, 1)
 
-// 解锁：Lua脚本保证原子�?
-script := `
-if redis.call("get", KEYS[1]) == ARGV[1] then
-    return redis.call("del", KEYS[1])
-end`
+// 方案二：Mutex（通用，适合复杂临界区）
+mu.Lock(); count++; mu.Unlock()
+
+// 方案三：channel（Go 惯用，适合生产者消费者）
+countCh <- 1
 ```
 
-**要点**�?
-- value用UUID防止误删其他进程的锁
-- TTL防止死锁
-- Lua脚本保证unlock原子�?
-- 支持重试和续�?
+本项目 `orderStore` 用 `sync.RWMutex`，读多写少场景下允许并发读，写时独占。
 
-### 5. 如何设计线程安全的LRU缓存�?
+---
 
-**结构**�?
-- map：O(1)查找
-- 双向链表：O(1)移动到头�?
-- sync.RWMutex：读写锁
+### Q8：遇到的最大挑战？
 
-**读多写少优化**：RWMutex允许多个goroutine并发�?
+**问题**：推荐服务响应慢，用户等待超过 2s。
 
-### 6. 如何避免死锁�?
+**分析**：
+- AI 调用（Python 子进程 + ModelScope API）耗时约 1.5~2s
+- 规则召回 + AI 排序串行执行
 
-**预防措施**�?
-- 锁排序：按资源ID排序加锁
-- 超时机制：context.WithTimeout
-- 减少锁粒度：细粒度锁
-- tryLock：非阻塞尝试
+**解决**：
+1. `exec.CommandContext(ctx, ...)` 设置超时，超时后 kill 子进程
+2. 超时降级：直接返回规则召回结果（关键词匹配）
+3. 推荐结果缓存：相同需求 10min 内复用
 
-**案例**：转账防死锁
+**结果**：P50 降至 200ms 以内（命中缓存），P99 降至 2s（大模型正常响应）。
+
+---
+
+## 三、技术深度
+
+### 网络层（三协议）
+
+```
+HTTP (Gin)  ← 前端 Web / REST API
+TCP (9091)  ← 发送文本需求 → 返回商家 JSON
+UDP (9092)  ← PING/PONG 心跳 + 推荐查询
+```
+
+TCP/UDP 均调用同一个 `recommendByRequirement(msg)` 函数，体现了业务逻辑与传输层解耦。
+
+### Redis UniversalClient
+
 ```go
-if from.ID < to.ID {
-    from.Lock(); to.Lock()
-} else {
-    to.Lock(); from.Lock()
-}
+rdb = redis.NewUniversalClient(&redis.UniversalOptions{
+    Addrs:        addrs,   // 单地址→单机，多地址→集群
+    PoolSize:     100,
+    MinIdleConns: 20,
+})
 ```
 
-## 高频问题
+`UniversalClient` 自动根据地址数量判断单机还是集群，无需修改代码切换模式。
 
-### 1. 为什么分库分表？如何设计的？
+### GORM 连接池
 
-**分库**：按user_id hash取模�?10库，水平扩展
-**分表**�?
-- user_preference：按user_id取模100�?
-- orders：按时间range分片，每月一�?
-
-**好处**�?
-- 单表数据量控制在千万�?
-- 查询性能提升10�?+
-- 支持水平扩展
-
-### 2. 缓存如何设计的？穿�?/击穿/雪崩怎么处理�?
-
-**三级缓存**�?
-- L1：本地缓存（BigCache）热点商家，减少网络开销
-- L2：Redis Cluster，用户偏好、推荐结�?
-- L3：MySQL持久�?
-
-**问题处理**�?
-- 穿透：布隆过滤�?
-- 击穿：互斥锁
-- 雪崩：随机TTL、熔断降�?
-
-### 3. 推荐算法怎么实现的？
-
-**召回层**（并发执行）：
-- 偏好召回：基于用户偏好匹配商�?
-- 协同过滤：基于相似用户的订单
-- 热门召回：当前热门商�?
-
-**排序�?**�?
-- 特征工程：价格匹配度、口味、距离、评�?
-- AI打分：大模型评估用户需求与商家匹配度
-- 加权融合：最终排�?
-
-### 4. 高并发如何处理？
-
-**网关�?**�?
-- 限流：令牌桶算法，IP�?+用户�?
-- 负载均衡：Nginx轮询
-
-**服务�?**�?
-- goroutine并发处理
-- 连接池复用（DB/Redis�?
-- 批量操作（Kafka batch�?
-
-**数据�?**�?
-- 读写分离
-- 分库分表
-- 缓存预热
-
-**QPS**：单�?5000+，集群可�?10�?+
-
-### 5. 分布式事务如何处理？
-
-采用Saga模式�?
-
-```
-下单流程�?
-1. 锁定库存 -> 失败回滚
-2. 创建订单 -> 失败解锁库存
-3. 发起支付 -> 失败取消订单
-4. 确认订单 -> 失败退�?
+```go
+sqlDB.SetMaxIdleConns(20)     // 空闲连接保持
+sqlDB.SetMaxOpenConns(100)    // 最大连接数
+sqlDB.SetConnMaxLifetime(time.Hour)  // 防止连接被 DB 端踢掉
 ```
 
-每个步骤都有补偿操作，保证最终一致性�?
+避免每次请求建立新连接的开销，支持高并发下的连接复用。
 
-### 6. 爬虫如何应对反爬�?
+### context 超时传递
 
-**策略**�?
-- 浏览器池：维护N个Playwright实例负载均衡
-- 代理池：IP轮换
-- User-Agent随机�?
-- Cookie持久化
-- 验证码识别：AI OCR
-- 限流：单账号QPS<1
+```go
+// 整个请求链路共用同一个 ctx
+cmd := exec.CommandContext(ctx, pythonCmd, args...)
+// 请求超时 → ctx 取消 → 子进程被 kill → 资源自动释放
+```
 
-**成功�?**�?95%+
+---
 
-### 7. 如何保证服务稳定性？
+## 四、数据指标（可对外声称）
 
-**监控**�?
-- Prometheus：QPS、RT、错误率
-- Grafana：可视化大盘
-- Jaeger：链路追踪定位慢查询
+| 指标 | 值 | 说明 |
+|---|---|---|
+| 并发连接 | 100+ | Redis 连接池 + MySQL 连接池 |
+| 偏好缓存命中率 | 95%+ | Redis 24h TTL |
+| 推荐 P50 RT | < 200ms | 缓存命中场景 |
+| 推荐 P99 RT | < 2s | 大模型实时调用 |
+| 降级覆盖率 | 100% | AI 超时自动降级规则推荐 |
 
-**治理**�?
-- 熔断：连续失�?5次熔�?30s
-- 降级：AI超时返回热门推荐
-- 限流：网关统一限流
+---
 
-**告警**�?
-- 错误�?>5%
-- RT>1s
-- QPS异常
+## 五、诚实口径（面试关键）
 
-### 8. 遇到的最大挑战？
+```
+项目当前主链路（网关 + MySQL + Redis + AI推荐）已完整运行，可真实演示。
 
-**问题**：推荐服务RT高达3s，用户体验差
+微服务拆分、Kafka 消息流、gRPC 服务间通信的代码骨架已完成，
+基础设施在 docker-compose.yml 中已编排，
+下一步是完成各服务的 gRPC Server 注册和 Kafka 消费者接入。
 
-**分析**�?
-- Jaeger链路追踪发现AI调用耗时2.5s
-- 并发召回没有设置超时
-
-**解决**�?
-1. AI调用异步�?+超时控制�?300ms�?
-2. 召回结果缓存10分钟
-3. 本地缓存热门商家
-4. AI超时降级为规则推�?
-
-**结果**：RT降至200ms，提�?15�?
-
-## 技术深�?
-
-### 网络编程
-
-**gRPC**�?
-- TCP长连接，减少握手开销
-- Protocol Buffers序列化，比JSON�?5�?
-- HTTP/2多路复用
-
-**Kafka**�?
-- TCP批量发送（batch.size=16KB�?
-- 零拷贝sendfile，减少CPU消�?
-
-**Redis**�?
-- 连接池（100连接），复用TCP连接
-- Pipeline批量操作，减少RTT
-
-### 并发模型
-
-**goroutine**�?
-- 轻量级协程，栈初�?2KB
-- GMP调度模型，充分利用多�?
-
-**channel**�?
-- 推荐服务多路召回并发
-- WaitGroup等待所有goroutine完成
-
-### 数据库优�?
-
-**索引**�?
-- user_id、merchant_id建立索引
-- 联合索引（user_id, created_at�?
-
-**慢查�?**�?
-- EXPLAIN分析执行计划
-- 避免SELECT *，只查需要的字段
-- 分页使用覆盖索引
-
-## 数据指标
-
-- **QPS**：单�?5000+
-- **RT**：P99 < 200ms
-- **可用�?**�?99.9%
-- **缓存命中率**：95%+
-- **数据规模**：亿级订�?
-
-## 项目价�?
-
-1. **业务价�?**：提升用户点餐效�?30%
-2. **技术价�?**：积累大规模分布式系统经�?
-3. **个人成长**：掌握后台核心技术栈
+分库分表的路由逻辑（GetDB by userID 取模）已实现，
+当前主流程使用单库，生产环境注入多个 DB Config 即可激活分片。
+```

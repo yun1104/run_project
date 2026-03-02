@@ -4,7 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"meituan-ai-agent/pkg/cache"
+	"xiangchisha/pkg/cache"
 	"sync"
 	"time"
 )

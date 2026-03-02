@@ -1,4 +1,4 @@
-module meituan-ai-agent
+module xiangchisha
 
 go 1.21
 

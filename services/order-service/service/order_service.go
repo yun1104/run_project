@@ -4,9 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"meituan-ai-agent/pkg/cache"
-	"meituan-ai-agent/pkg/database"
-	"meituan-ai-agent/pkg/lock"
+	"xiangchisha/pkg/cache"
+	"xiangchisha/pkg/database"
+	"xiangchisha/pkg/lock"
 	"sync/atomic"
 	"time"
 )

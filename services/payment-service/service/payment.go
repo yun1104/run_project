@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"errors"
-	"meituan-ai-agent/pkg/mq"
+	"xiangchisha/pkg/mq"
 )
 
 type PaymentService struct {

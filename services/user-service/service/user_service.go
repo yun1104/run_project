@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"meituan-ai-agent/pkg/cache"
-	"meituan-ai-agent/pkg/database"
-	"meituan-ai-agent/services/user-service/models"
+	"xiangchisha/pkg/cache"
+	"xiangchisha/pkg/database"
+	"xiangchisha/services/user-service/models"
 	"time"
 )
 
