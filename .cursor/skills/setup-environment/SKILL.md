@@ -1,139 +1,85 @@
 ---
 name: setup-environment
-description: 项目环境搭建指南，包含所有依赖安装步骤。当协作者需要搭建本项目开发环境、安装依赖、配置数据库/Redis/Kafka等基础设施时使用。
+description: 项目环境搭建指南，包含 MySQL/Redis 安装和建表步骤。当协作者需要搭建本项目开发环境时使用。
 ---
 
 # 项目环境搭建
 
 ## 前置要求
 
-- Go 1.21+
-- Docker & Docker Compose
-- Git
+- Windows 系统
+- MySQL 8.0（本地安装）
+- Redis（本地安装）
+- Go 1.21+（或由启动脚本自动下载）
 
-## 第一步：克隆项目
+---
 
-```bash
-git clone <repo-url>
-cd run_project
+## 第一步：安装 MySQL
+
+1. 下载 MySQL 8.0 安装包：https://dev.mysql.com/downloads/installer/
+2. 安装时设置 root 密码为 `123456`
+3. 确保 MySQL 服务在 `3306` 端口运行
+
+> 密码必须是 `123456`，否则需要修改 `run_silent.vbs` 里的 `-MySQLPassword` 参数。
+
+---
+
+## 第二步：初始化数据库和建表
+
+MySQL 安装完成后，执行建表脚本：
+
+```cmd
+mysql -u root -p123456 < scripts\init_db.sql
 ```
 
-## 第二步：安装 Go 依赖
+该脚本会创建：
+- 数据库 `meituan_db_0`、`meituan_db_1`
+- 表 `users`（用户账号密码）
+- 表 `user_preferences_0`（用户饮食偏好）
+- 表 `orders_202601`（订单记录，按月分表）
 
-```bash
-go mod tidy
+---
+
+## 第三步：安装 Redis
+
+1. 下载 Redis for Windows：https://github.com/tporadowski/redis/releases
+2. 解压后运行 `redis-server.exe`，或注册为 Windows 服务
+3. 确保 Redis 在 `6379` 端口运行（无密码）
+
+---
+
+## 第四步：启动项目
+
+直接双击 `run_silent.vbs`。
+
+启动脚本会自动：
+- 检测 Go 环境（没有则自动下载便携版）
+- 停止旧进程
+- 运行 `go mod tidy` 安装依赖
+- 启动服务并打开浏览器
+
+服务地址：`http://127.0.0.1:8080/`
+
+---
+
+## 停止服务
+
+双击 `stop_silent.vbs`，或运行：
+
+```cmd
+powershell -ExecutionPolicy Bypass -File scripts\stop.ps1
 ```
 
-安装 Playwright 浏览器（爬虫功能需要）：
+---
 
-```bash
-go run github.com/playwright-community/playwright-go/cmd/playwright@latest install --with-deps
-```
+## 配置说明
 
-## 第三步：配置环境变量
+| 参数 | 默认值 | 位置 |
+|------|--------|------|
+| MySQL 地址 | 127.0.0.1:3306 | run_silent.vbs |
+| MySQL 用户名 | root | run_silent.vbs |
+| MySQL 密码 | 123456 | run_silent.vbs |
+| Redis 地址 | 127.0.0.1:6379 | run_silent.vbs |
+| AI API Token | ms-dd4cdb20-b7a7-4e39-95ea-ae1b5f412d4d | run_silent.vbs（已内置） |
 
-复制并填写 `.env`：
-
-```bash
-cp .env.example .env  # 如没有 example 则手动创建
-```
-
-`.env` 内容：
-
-```
-MODELSCOPE_API_KEY=your-api-key-here
-```
-
-> API Key 从 [ModelScope](https://modelscope.cn) 或阿里云 DashScope 获取。
-
-## 第四步：启动基础设施
-
-```bash
-cd scripts
-docker-compose up -d
-```
-
-等待约 30 秒，待所有容器启动完成。
-
-## 第五步：初始化数据库
-
-```bash
-docker exec -i scripts-mysql-0-1 mysql -uroot -proot < scripts/init_db.sql
-```
-
-或通过部署脚本一键完成（Linux/Mac）：
-
-```bash
-chmod +x scripts/deploy.sh
-./scripts/deploy.sh
-```
-
-## 第六步：初始化 Kafka Topics
-
-```bash
-# order.history
-docker exec scripts-kafka-1 kafka-topics --create \
-  --bootstrap-server localhost:9092 \
-  --topic order.history --partitions 3 --replication-factor 1
-
-# order.create
-docker exec scripts-kafka-1 kafka-topics --create \
-  --bootstrap-server localhost:9092 \
-  --topic order.create --partitions 3 --replication-factor 1
-
-# order.paid
-docker exec scripts-kafka-1 kafka-topics --create \
-  --bootstrap-server localhost:9092 \
-  --topic order.paid --partitions 3 --replication-factor 1
-```
-
-## 第七步：初始化 Redis Cluster
-
-```bash
-docker exec -it scripts-redis-node-1-1 redis-cli \
-  --cluster create \
-  127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 \
-  --cluster-replicas 0 --cluster-yes
-```
-
-## 第八步：修改配置文件
-
-查看并按需修改 `configs/config.yaml`，默认配置如下：
-
-| 服务 | 地址 | 备注 |
-|------|------|------|
-| MySQL-0 | 127.0.0.1:3306 | dbname: meituan_db_0 |
-| MySQL-1 | 127.0.0.1:3307 | dbname: meituan_db_1 |
-| Redis Cluster | 127.0.0.1:7000~7002 | 3节点无副本 |
-| Kafka | 127.0.0.1:9092 | |
-| Consul | 127.0.0.1:8500 | |
-
-## 第九步：启动服务
-
-```bash
-go run main.go
-```
-
-服务默认端口：`8080`
-
-## 基础设施服务列表
-
-| 服务 | 端口 | 用途 |
-|------|------|------|
-| MySQL-0 | 3306 | 主数据库 |
-| MySQL-1 | 3307 | 分库 |
-| Redis (Cluster) | 7000-7002 | 缓存 |
-| Kafka | 9092 | 消息队列 |
-| Zookeeper | 2181 | Kafka 依赖 |
-| Consul | 8500 | 服务发现 |
-| Prometheus | 9090 | 监控采集 |
-| Grafana | 3000 | 监控面板 (admin/admin) |
-| Jaeger | 16686 | 链路追踪 |
-
-## 常见问题
-
-**Redis Cluster 连接失败**：确认所有3个节点容器都在运行，并已完成 cluster create 初始化。
-
-**Kafka topics 创建失败**：等待 Zookeeper + Kafka 完全启动后再执行（约30s）。
-
-**Playwright 浏览器缺失**：重新运行 `playwright install --with-deps`。
+如需修改，直接编辑 `run_silent.vbs` 第50行的启动命令参数。
