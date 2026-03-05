@@ -111,19 +111,21 @@ def _contains_strong_order_hint(user_text: str) -> bool:
     return False
 
 
-def _recommend(user_text: str, pref: dict, candidates: list):
+def _recommend(user_text: str, pref: dict, candidates: list, nearby_foods: list):
     pref_text = json.dumps(pref or {}, ensure_ascii=False)
     cand_text = json.dumps(candidates or [], ensure_ascii=False)
+    nearby_text = json.dumps(nearby_foods or [], ensure_ascii=False)
     messages = [
         {"role": "system", "content": "你是外卖推荐助手。只输出JSON。"},
         {
             "role": "user",
             "content": (
-                "请基于用户需求、用户偏好和候选商家，推荐最多3个商家并排序。"
-                "输出JSON：{\"reply\":\"...\",\"merchants\":[{\"id\":10001,\"reason\":\"...\"}]}。"
+                "请基于用户需求、用户偏好、附近美食JSON和候选商家，推荐最多3个商家并排序。"
+                "输出JSON：{\"reply\":\"...\",\"merchants\":[{\"id\":10001,\"reason\":\"...\",\"dishes\":[\"菜品1\",\"菜品2\"]}]}。"
                 "商家id只能从候选商家中选择。不要输出JSON之外内容。"
                 "\n用户输入：" + user_text +
                 "\n用户偏好：" + pref_text +
+                "\n附近美食JSON：" + nearby_text +
                 "\n候选商家：" + cand_text
             ),
         },
@@ -158,7 +160,13 @@ def main():
     data = _read_input()
     user_text = str(data.get("requirement", "") or "").strip()
     pref = data.get("preference", {}) if data.get("has_pref") else {}
+    if isinstance(pref, dict):
+        if pref.get("cuisine_likes") is None:
+            pref["cuisine_likes"] = []
+        if pref.get("avoid_foods") is None:
+            pref["avoid_foods"] = []
     candidates = data.get("candidates", [])
+    nearby_foods = data.get("nearby_foods", [])
 
     try:
         hint_score = _order_hint_score(user_text)
@@ -174,7 +182,7 @@ def main():
         elif hint_score >= 2:
             is_order = True
         if is_order:
-            result = _recommend(user_text, pref, candidates)
+            result = _recommend(user_text, pref, candidates, nearby_foods)
             out = {
                 "is_order_intent": True,
                 "reply": result.get("reply", ""),

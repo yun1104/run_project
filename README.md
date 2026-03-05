@@ -40,6 +40,16 @@
 2. 配置环境：编辑 `configs/config.yaml`
 3. 启动网关：`go run api-gateway/main.go`
 
+### 美团搜索功能（可选）
+
+「去店铺下单」功能依赖 Headless 浏览器模拟搜索。需在运行环境安装 Playwright 与 Chromium：
+
+```bash
+go run github.com/playwright-community/playwright-go/cmd/playwright@latest install chromium
+```
+
+若未安装，该功能将不可用，前端会回退到用定位城市拼接的搜索 URL（`i.meituan.com/s/{城市}-{店铺名}`）。
+
 ## 技术栈
 
 Go 1.21 | Gin | MySQL | Redis | Kafka | gRPC | Consul | Playwright

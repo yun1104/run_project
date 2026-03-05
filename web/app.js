@@ -2,6 +2,7 @@ const messageList = document.getElementById("messageList");
 const promptInput = document.getElementById("promptInput");
 const sendBtn = document.getElementById("sendBtn");
 const newChatBtn = document.getElementById("newChatBtn");
+const locationBtn = document.getElementById("locationBtn");
 const accountBtn = document.getElementById("accountBtn");
 const sessionList = document.getElementById("sessionList");
 const prefModal = document.getElementById("prefModal");
@@ -21,6 +22,10 @@ const regPassword2 = document.getElementById("regPassword2");
 const regBackBtn = document.getElementById("regBackBtn");
 const regSubmitBtn = document.getElementById("regSubmitBtn");
 const toastEl = document.getElementById("toast");
+const loginLocationPermModal = document.getElementById("loginLocationPermModal");
+const loginLocAllowOnceBtn = document.getElementById("loginLocAllowOnceBtn");
+const loginLocAllowAlwaysBtn = document.getElementById("loginLocAllowAlwaysBtn");
+const loginLocDenyBtn = document.getElementById("loginLocDenyBtn");
 
 let sessions = [];
 let currentSessionId = null;
@@ -37,6 +42,7 @@ let prefAnswers = {
   diet_goal: "",
   dining_time: "",
 };
+let loginLocationModalResolver = null;
 
 function normalizeDisplayName(name) {
   return String(name || "").replace(/[\r\n\t]/g, "").trim();
@@ -99,6 +105,7 @@ function appendCards(merchants) {
   if (!Array.isArray(merchants) || merchants.length === 0) return;
   const cards = document.createElement("div");
   cards.className = "cards";
+  const meituanUrl = "https://meishi.meituan.com/i/";
   merchants.forEach((m) => {
     const card = document.createElement("div");
     card.className = "card";
@@ -107,33 +114,75 @@ function appendCards(merchants) {
       <div class="meta">品类：${m.category} | 评分：${m.rating}</div>
       <div class="meta">人均：￥${m.avg_price} | 配送：${m.delivery_time}分钟</div>
       <div class="meta">推荐理由：${m.reason}</div>
-      <button class="order-btn">选这家并自动下单支付</button>
+      <div class="order-actions">
+        <button class="order-btn order-btn-open">打开美团登录</button>
+        <button class="order-btn order-btn-go" style="display:none">去店铺下单</button>
+      </div>
     `;
-    const btn = card.querySelector(".order-btn");
-    btn.onclick = async () => {
-      btn.disabled = true;
-      btn.textContent = "处理中...";
+    const btnOpen = card.querySelector(".order-btn-open");
+    const btnGo = card.querySelector(".order-btn-go");
+    btnOpen.onclick = () => {
+      window.open(meituanUrl, "_blank");
+      showToast("请先登录美团账号，登录完成后点击「去店铺下单」", "success");
+      btnOpen.style.display = "none";
+      btnGo.style.display = "";
+    };
+    btnGo.onclick = async () => {
+      const kw = String(m.name || "").trim();
+      btnGo.disabled = true;
+      btnGo.textContent = "处理中...";
       try {
-        const resp = await fetch("/api/v1/order/auto-place-pay", {
+        const resp = await fetch("/api/v1/order/meituan-search", {
           method: "POST",
           headers: authHeaders(),
-          body: JSON.stringify({
-            merchant_id: m.id,
-            merchant_name: m.name,
-            amount: Number(m.avg_price || 30),
-          }),
+          body: JSON.stringify({ merchant_name: kw || m.name }),
         });
         const data = await resp.json();
+        if (data.code === 503) {
+          showToast(data.message || "美团搜索服务暂不可用，已打开美团首页", "error");
+          let fallbackUrl = meituanUrl;
+          if (kw) {
+            try {
+              const locResp = await fetch("/api/v1/user/location/current", { headers: authHeaders() });
+              const locData = await locResp.json();
+              if (locData.code === 0 && locData.data?.city_pinyin) {
+                fallbackUrl = "https://i.meituan.com/s/" + locData.data.city_pinyin + "-" + encodeURIComponent(kw);
+              }
+            } catch (_) { /* ignore */ }
+          }
+          window.open(fallbackUrl, "_blank");
+          return;
+        }
         if (data.code !== 0) {
-          appendMessage("assistant", "下单失败，请稍后重试。");
+          showToast("搜索失败，请稍后重试", "error");
+          return;
+        }
+        const d = data.data || {};
+        if (d.found && d.store_url) {
+          window.open(d.store_url, "_blank");
+          showToast("已打开店铺，请在美团页面完成下单", "success");
+        } else if (d.search_url) {
+          window.open(d.search_url, "_blank");
+          showToast("已打开搜索结果，请在列表中选择店铺下单", "success");
         } else {
-          appendMessage("assistant", data.data.tip || "已自动下单并支付。");
+          let openUrl = meituanUrl;
+          if (kw) {
+            try {
+              const locResp = await fetch("/api/v1/user/location/current", { headers: authHeaders() });
+              const locData = await locResp.json();
+              if (locData.code === 0 && locData.data?.city_pinyin) {
+                openUrl = "https://i.meituan.com/s/" + locData.data.city_pinyin + "-" + encodeURIComponent(kw);
+              }
+            } catch (_) { /* ignore */ }
+          }
+          window.open(openUrl, "_blank");
+          showToast("已打开搜索结果，请在列表中选择店铺下单", "success");
         }
       } catch (e) {
-        appendMessage("assistant", "下单失败，网络异常。");
+        showToast("网络异常，请稍后重试", "error");
       } finally {
-        btn.disabled = false;
-        btn.textContent = "选这家并自动下单支付";
+        btnGo.disabled = false;
+        btnGo.textContent = "去店铺下单";
       }
     };
     cards.appendChild(card);
@@ -186,6 +235,22 @@ function renderMessages() {
   messageList.scrollTop = messageList.scrollHeight;
 }
 
+async function getLocationForChat() {
+  try {
+    const resp = await fetch("/api/v1/user/location/current", { headers: authHeaders() });
+    const data = await resp.json();
+    if (data.code === 0 && data.data && data.data.location) {
+      const loc = data.data.location;
+      if (loc.latitude != null && loc.longitude != null) {
+        return { latitude: loc.latitude, longitude: loc.longitude, radius: 3000 };
+      }
+    }
+  } catch (e) {
+    /* ignore */
+  }
+  return null;
+}
+
 async function sendMessage() {
   const text = promptInput.value.trim();
   if (!text) return;
@@ -193,10 +258,17 @@ async function sendMessage() {
   promptInput.value = "";
 
   try {
+    const loc = await getLocationForChat();
+    const body = { requirement: text };
+    if (loc) {
+      body.latitude = loc.latitude;
+      body.longitude = loc.longitude;
+      body.radius = loc.radius || 3000;
+    }
     const resp = await fetch("/api/v1/chat/send", {
       method: "POST",
       headers: authHeaders(),
-      body: JSON.stringify({ requirement: text }),
+      body: JSON.stringify(body),
     });
     const data = await resp.json();
     if (data.code !== 0) {
@@ -218,6 +290,11 @@ promptInput.addEventListener("keydown", (e) => {
   }
 });
 newChatBtn.onclick = () => createSession();
+if (locationBtn) {
+  locationBtn.onclick = () => {
+    window.location.href = "/assets/location.html";
+  };
+}
 if (accountBtn) {
   accountBtn.onclick = () => {
     window.location.href = "/assets/account.html";
@@ -243,6 +320,93 @@ function setAuth(data) {
   localStorage.setItem("username", username);
 }
 
+function loginLocationKey() {
+  return `login_location_perm_${userId}`;
+}
+
+function closeLoginLocationModal(choice) {
+  if (loginLocationPermModal) {
+    loginLocationPermModal.classList.add("hidden");
+  }
+  if (loginLocationModalResolver) {
+    const fn = loginLocationModalResolver;
+    loginLocationModalResolver = null;
+    fn(choice);
+  }
+}
+
+function openLoginLocationModal() {
+  if (!loginLocationPermModal) {
+    return Promise.resolve("denied");
+  }
+  loginLocationPermModal.classList.remove("hidden");
+  return new Promise((resolve) => {
+    loginLocationModalResolver = resolve;
+  });
+}
+
+function getBrowserLocation() {
+  return new Promise((resolve) => {
+    if (!navigator.geolocation) {
+      resolve(null);
+      return;
+    }
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        resolve({
+          latitude: Number(pos.coords.latitude.toFixed(6)),
+          longitude: Number(pos.coords.longitude.toFixed(6)),
+        });
+      },
+      () => resolve(null),
+      { enableHighAccuracy: true, timeout: 6000, maximumAge: 180000 }
+    );
+  });
+}
+
+async function saveLoginLocation(loc) {
+  const resp = await fetch("/api/v1/user/location", {
+    method: "POST",
+    headers: authHeaders(),
+    body: JSON.stringify({
+      latitude: Number(loc.latitude),
+      longitude: Number(loc.longitude),
+      source: "login_browser",
+    }),
+  });
+  const data = await resp.json();
+  return data.code === 0;
+}
+
+async function handleLoginLocationFlow() {
+  if (!userId || !token) return;
+  const saved = localStorage.getItem(loginLocationKey()) || "unset";
+  let choice = saved;
+  if (saved === "unset") {
+    choice = await openLoginLocationModal();
+    if (choice === "always") {
+      localStorage.setItem(loginLocationKey(), "always");
+    } else if (choice === "denied") {
+      localStorage.setItem(loginLocationKey(), "denied");
+    }
+  }
+  if (choice === "denied") {
+    showToast("你可在“定位查询”页面随时开启定位授权", "error");
+    return;
+  }
+  const loc = await getBrowserLocation();
+  if (!loc) {
+    showToast("定位失败，请检查浏览器权限", "error");
+    return;
+  }
+  const ok = await saveLoginLocation(loc);
+  if (ok) {
+    showToast("登录定位已保存");
+  } else {
+    showToast("登录定位保存失败", "error");
+  }
+}
+
 async function doLogin() {
   const u = authUsername.value.trim();
   const p = authPassword.value;
@@ -260,6 +424,7 @@ async function doLogin() {
   setAuth(data);
   authModal.classList.add("hidden");
   showToast(`欢迎回来，${username}`);
+  await handleLoginLocationFlow();
   await initPreferenceOnFirstUse();
 }
 
@@ -309,6 +474,15 @@ regBackBtn.onclick = () => {
   authModal.classList.remove("hidden");
 };
 regSubmitBtn.onclick = () => doRegister();
+if (loginLocAllowOnceBtn) {
+  loginLocAllowOnceBtn.onclick = () => closeLoginLocationModal("once");
+}
+if (loginLocAllowAlwaysBtn) {
+  loginLocAllowAlwaysBtn.onclick = () => closeLoginLocationModal("always");
+}
+if (loginLocDenyBtn) {
+  loginLocDenyBtn.onclick = () => closeLoginLocationModal("denied");
+}
 
 function toggleOption(question, option, btn) {
   const key = question.id;

@@ -11,6 +11,7 @@
     <aside class="sidebar">
       <div class="brand">AI 外卖助手</div>
       <button id="newChatBtn" class="new-chat">+ 新建会话</button>
+      <button id="locationBtn" class="new-chat secondary" type="button" onclick="window.location.href='/assets/location.html'">定位查询</button>
       <button id="accountBtn" class="new-chat secondary" type="button" onclick="window.location.href='/assets/account.html'">账号设置</button>
       <div id="sessionList" class="session-list"></div>
     </aside>
@@ -67,6 +68,18 @@
   </div>
 
   <div id="toast" class="toast hidden"></div>
+
+  <div id="loginLocationPermModal" class="pref-modal hidden">
+    <div class="pref-panel">
+      <h3>是否允许登录后获取你的位置？</h3>
+      <div class="account-line">用于保存定位与IP信息，并提升附近推荐质量。</div>
+      <div class="pref-actions">
+        <button id="loginLocAllowOnceBtn" class="ghost-btn" type="button">仅本次允许</button>
+        <button id="loginLocAllowAlwaysBtn" type="button">每次登录允许</button>
+        <button id="loginLocDenyBtn" class="ghost-btn" type="button">不允许</button>
+      </div>
+    </div>
+  </div>
 
   <script src="/assets/app.js?v=20260311"></script>
 </body>
