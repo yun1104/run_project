@@ -1,24 +1,31 @@
 #!/bin/bash
+set -e
+cd "$(dirname "$0")/.."
 
-echo "鍚姩鍩虹璁炬�?..."
-docker-compose -f scripts/docker-compose.yml up -d
+echo "=== 检查 Docker ==="
+if ! command -v docker &>/dev/null; then
+  echo "请先安装 Docker: https://docs.docker.com/engine/install/"
+  exit 1
+fi
+if ! docker compose version 2>/dev/null && ! docker-compose version 2>/dev/null; then
+  echo "请安装 Docker Compose"
+  exit 1
+fi
 
-echo "绛夊緟鏈嶅姟鍚�?..."
-sleep 30
+echo "=== 环境配置 ==="
+if [ ! -f .env ]; then
+  cp .env.example .env
+  echo "已创建 .env，请编辑填入 MODELSCOPE_API_KEY 和 AMAP_API_KEY 后重试"
+  exit 1
+fi
 
-echo "鍒濆鍖栨暟鎹�?..."
-mysql -h 127.0.0.1 -P 3306 -u root -proot < scripts/init_db.sql
+echo "=== 构建并启动 ==="
+docker compose up -d --build
 
-echo "鍒涘缓Kafka涓婚�?..."
-docker exec -it $(docker ps -qf "name=kafka") kafka-topics --create --topic order.history --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
-docker exec -it $(docker ps -qf "name=kafka") kafka-topics --create --topic order.create --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
-docker exec -it $(docker ps -qf "name=kafka") kafka-topics --create --topic order.paid --bootstrap-server localhost:9092 --partitions 3 --replication-factor 1
+echo "=== 等待服务就绪 ==="
+sleep 5
+docker compose ps
 
-echo "鍒濆鍖朢edis闆嗙�?..."
-docker exec -it $(docker ps -qf "name=redis-node-1") redis-cli --cluster create 127.0.0.1:7000 127.0.0.1:7001 127.0.0.1:7002 --cluster-replicas 0
-
-echo "閮ㄧ讲瀹屾�?"
-echo "Consul: http://localhost:8500"
-echo "Prometheus: http://localhost:9090"
-echo "Grafana: http://localhost:3000 (admin/admin)"
-echo "Jaeger: http://localhost:16686"
+echo ""
+echo "部署完成。访问: http://$(hostname -I 2>/dev/null | awk '{print $1}'):8080/"
+echo "或: http://8.134.191.205:8080/"
