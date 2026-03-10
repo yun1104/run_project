@@ -48,14 +48,12 @@ End Function
 
 cmd = "powershell -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File """ & baseDir & "\scripts\run.ps1"" " & _
       "-MySQLHost ""127.0.0.1"" -MySQLPort 3306 -MySQLUser ""root"" -MySQLPassword ""123456"" -MySQLDB ""meituan_db_0"" " & _
-      "-RedisAddrs ""127.0.0.1:6379"" -ModelScopeToken ""ms-dd4cdb20-b7a7-4e39-95ea-ae1b5f412d4d"" -OpenBrowser"
+      "-RedisAddrs ""127.0.0.1:6379"" -ModelScopeToken ""ms-dd4cdb20-b7a7-4e39-95ea-ae1b5f412d4d"""
 
 AppendLog "run_silent.vbs start"
 shell.Run cmd, 0, False
 If WaitHttpReady("http://127.0.0.1:8080/", 90000) Then
   shell.Run "explorer.exe http://127.0.0.1:8080/", 0, False
-  WScript.Sleep 300
-  shell.Run "rundll32 url.dll,FileProtocolHandler http://127.0.0.1:8080/", 0, False
   AppendLog "browser open triggered"
 Else
   AppendLog "http not ready within timeout"

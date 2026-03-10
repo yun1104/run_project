@@ -3,6 +3,12 @@ import os
 import sys
 import urllib.request
 
+# 强制 UTF-8，避免 Windows 默认 GBK 导致中文乱码
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8")
+
 
 def _read_input():
     raw = sys.stdin.read()
@@ -114,19 +120,22 @@ def _contains_strong_order_hint(user_text: str) -> bool:
 def _recommend(user_text: str, pref: dict, candidates: list, nearby_foods: list):
     pref_text = json.dumps(pref or {}, ensure_ascii=False)
     cand_text = json.dumps(candidates or [], ensure_ascii=False)
-    nearby_text = json.dumps(nearby_foods or [], ensure_ascii=False)
     messages = [
-        {"role": "system", "content": "你是外卖推荐助手。只输出JSON。"},
+        {"role": "system", "content": "你是外卖推荐助手，需要同时推荐店铺和具体菜品。只输出JSON，禁止输出其他内容。"},
         {
             "role": "user",
             "content": (
-                "请基于用户需求、用户偏好、附近美食JSON和候选商家，推荐最多3个商家并排序。"
-                "输出JSON：{\"reply\":\"...\",\"merchants\":[{\"id\":10001,\"reason\":\"...\",\"dishes\":[\"菜品1\",\"菜品2\"]}]}。"
-                "商家id只能从候选商家中选择。不要输出JSON之外内容。"
-                "\n用户输入：" + user_text +
+                "根据用户需求和偏好，从候选商家中推荐最多3家并为每家推荐2-4道菜。\n"
+                "输出格式（严格JSON，不要有多余文字）：\n"
+                "{\"reply\":\"...(回复中需自然地提及具体菜名，不只说推荐哪家店)\","
+                "\"merchants\":[{\"id\":10001,\"reason\":\"推荐理由\","
+                "\"dishes\":[\"菜品A\",\"菜品B\",\"菜品C\"]}]}\n"
+                "菜品选取规则：①优先从商家的 recommended_dishes 字段中选取 "
+                "②若该字段为空，根据商家品类推断2-3道该品类常见菜品 "
+                "③商家id只能从候选商家中选择\n"
+                "用户输入：" + user_text +
                 "\n用户偏好：" + pref_text +
-                "\n附近美食JSON：" + nearby_text +
-                "\n候选商家：" + cand_text
+                "\n候选商家（含菜品）：" + cand_text
             ),
         },
     ]

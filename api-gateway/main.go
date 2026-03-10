@@ -1232,6 +1232,7 @@ func recommendByModelScope(ctx context.Context, requirement string, pref UserPre
 	cmd := exec.CommandContext(ctx, pythonCmd, pythonArgs...)
 	cmd.Dir = "."
 	cmd.Stdin = strings.NewReader(string(inputBytes))
+	cmd.Env = append(os.Environ(), "PYTHONIOENCODING=utf-8", "PYTHONUTF8=1")
 	output, err := cmd.Output()
 	if err != nil {
 		return "", nil, false, err

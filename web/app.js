@@ -105,86 +105,19 @@ function appendCards(merchants) {
   if (!Array.isArray(merchants) || merchants.length === 0) return;
   const cards = document.createElement("div");
   cards.className = "cards";
-  const meituanUrl = "https://meishi.meituan.com/i/";
   merchants.forEach((m) => {
     const card = document.createElement("div");
     card.className = "card";
+    const dishesHtml = (m.recommended_dishes && m.recommended_dishes.length > 0)
+      ? `<div class="meta dishes">推荐菜：${m.recommended_dishes.join(' · ')}</div>`
+      : '';
     card.innerHTML = `
       <h4>${m.name}</h4>
       <div class="meta">品类：${m.category} | 评分：${m.rating}</div>
-      <div class="meta">人均：￥${m.avg_price} | 配送：${m.delivery_time}分钟</div>
+      <div class="meta">人均：${m.avg_price > 0 ? '￥' + m.avg_price : '暂无'} | 配送：${m.delivery_time}分钟</div>
       <div class="meta">推荐理由：${m.reason}</div>
-      <div class="order-actions">
-        <button class="order-btn order-btn-open">打开美团登录</button>
-        <button class="order-btn order-btn-go" style="display:none">去店铺下单</button>
-      </div>
+      ${dishesHtml}
     `;
-    const btnOpen = card.querySelector(".order-btn-open");
-    const btnGo = card.querySelector(".order-btn-go");
-    btnOpen.onclick = () => {
-      window.open(meituanUrl, "_blank");
-      showToast("请先登录美团账号，登录完成后点击「去店铺下单」", "success");
-      btnOpen.style.display = "none";
-      btnGo.style.display = "";
-    };
-    btnGo.onclick = async () => {
-      const kw = String(m.name || "").trim();
-      btnGo.disabled = true;
-      btnGo.textContent = "处理中...";
-      try {
-        const resp = await fetch("/api/v1/order/meituan-search", {
-          method: "POST",
-          headers: authHeaders(),
-          body: JSON.stringify({ merchant_name: kw || m.name }),
-        });
-        const data = await resp.json();
-        if (data.code === 503) {
-          showToast(data.message || "美团搜索服务暂不可用，已打开美团首页", "error");
-          let fallbackUrl = meituanUrl;
-          if (kw) {
-            try {
-              const locResp = await fetch("/api/v1/user/location/current", { headers: authHeaders() });
-              const locData = await locResp.json();
-              if (locData.code === 0 && locData.data?.city_pinyin) {
-                fallbackUrl = "https://i.meituan.com/s/" + locData.data.city_pinyin + "-" + encodeURIComponent(kw);
-              }
-            } catch (_) { /* ignore */ }
-          }
-          window.open(fallbackUrl, "_blank");
-          return;
-        }
-        if (data.code !== 0) {
-          showToast("搜索失败，请稍后重试", "error");
-          return;
-        }
-        const d = data.data || {};
-        if (d.found && d.store_url) {
-          window.open(d.store_url, "_blank");
-          showToast("已打开店铺，请在美团页面完成下单", "success");
-        } else if (d.search_url) {
-          window.open(d.search_url, "_blank");
-          showToast("已打开搜索结果，请在列表中选择店铺下单", "success");
-        } else {
-          let openUrl = meituanUrl;
-          if (kw) {
-            try {
-              const locResp = await fetch("/api/v1/user/location/current", { headers: authHeaders() });
-              const locData = await locResp.json();
-              if (locData.code === 0 && locData.data?.city_pinyin) {
-                openUrl = "https://i.meituan.com/s/" + locData.data.city_pinyin + "-" + encodeURIComponent(kw);
-              }
-            } catch (_) { /* ignore */ }
-          }
-          window.open(openUrl, "_blank");
-          showToast("已打开搜索结果，请在列表中选择店铺下单", "success");
-        }
-      } catch (e) {
-        showToast("网络异常，请稍后重试", "error");
-      } finally {
-        btnGo.disabled = false;
-        btnGo.textContent = "去店铺下单";
-      }
-    };
     cards.appendChild(card);
   });
   messageList.appendChild(cards);

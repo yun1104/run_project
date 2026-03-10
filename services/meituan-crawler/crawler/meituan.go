@@ -160,7 +160,7 @@ func (c *MeituanCrawler) SearchStore(ctx context.Context, merchantName string) (
 	// 等待搜索结果加载
 	time.Sleep(6 * time.Second)
 
-	currentURL, _ := page.URL()
+	currentURL := page.URL()
 	if currentURL == "" {
 		currentURL = baseURL + "?keyword=" + url.QueryEscape(strings.TrimSpace(merchantName))
 	}
