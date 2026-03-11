@@ -8,8 +8,6 @@ import (
 	"fmt"
 	"github.com/gin-gonic/gin"
 	"log"
-	"xiangchisha/pkg/cache"
-	"xiangchisha/pkg/database"
 	"net"
 	"net/http"
 	"os"
@@ -18,6 +16,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"xiangchisha/pkg/cache"
+	"xiangchisha/pkg/database"
 )
 
 var (
@@ -89,6 +89,33 @@ type UserPreferenceRow struct {
 
 func (UserPreferenceRow) TableName() string {
 	return "user_preferences"
+}
+
+type OrderHistoryRow struct {
+	ID           int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID       int64     `gorm:"column:user_id;index;not null"`
+	MerchantID   int64     `gorm:"column:merchant_id;index"`
+	MerchantName string    `gorm:"column:merchant_name;size:100"`
+	Amount       float64   `gorm:"column:amount;type:decimal(10,2)"`
+	Status       string    `gorm:"column:status;size:20"`
+	Paid         bool      `gorm:"column:paid"`
+	CreatedAt    time.Time `gorm:"column:created_at"`
+	PaidAt       time.Time `gorm:"column:paid_at"`
+}
+
+func (OrderHistoryRow) TableName() string {
+	return "order_history"
+}
+
+type RequirementHistoryRow struct {
+	ID          int64     `gorm:"column:id;primaryKey;autoIncrement"`
+	UserID      int64     `gorm:"column:user_id;index;not null"`
+	Requirement string    `gorm:"column:requirement;type:text"`
+	CreatedAt   time.Time `gorm:"column:created_at"`
+}
+
+func (RequirementHistoryRow) TableName() string {
+	return "requirement_history"
 }
 
 func main() {
@@ -479,6 +506,28 @@ func GetOrders(c *gin.Context) {
 	if !ok {
 		return
 	}
+	db := database.GetDB(userID)
+	if db != nil {
+		var rows []OrderHistoryRow
+		if err := db.Where("user_id = ?", userID).Order("id desc").Limit(100).Find(&rows).Error; err == nil {
+			orders := make([]Order, 0, len(rows))
+			for _, row := range rows {
+				orders = append(orders, Order{
+					OrderID:      row.ID,
+					UserID:       row.UserID,
+					MerchantID:   row.MerchantID,
+					MerchantName: row.MerchantName,
+					Amount:       row.Amount,
+					Status:       row.Status,
+					Paid:         row.Paid,
+					CreatedAt:    row.CreatedAt,
+					PaidAt:       row.PaidAt,
+				})
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 0, "data": gin.H{"orders": orders}})
+			return
+		}
+	}
 	storeMu.RLock()
 	defer storeMu.RUnlock()
 
@@ -509,18 +558,38 @@ func CreateOrder(c *gin.Context) {
 		return
 	}
 
-	storeMu.Lock()
-	orderSeq++
+	now := time.Now()
 	order := Order{
-		OrderID:      orderSeq,
 		UserID:       userID,
 		MerchantID:   req.MerchantID,
 		MerchantName: req.MerchantName,
 		Amount:       req.Amount,
 		Status:       "created",
 		Paid:         false,
-		CreatedAt:    time.Now(),
+		CreatedAt:    now,
 	}
+	db := database.GetDB(userID)
+	if db != nil {
+		row := OrderHistoryRow{
+			UserID:       userID,
+			MerchantID:   req.MerchantID,
+			MerchantName: req.MerchantName,
+			Amount:       req.Amount,
+			Status:       "created",
+			Paid:         false,
+			CreatedAt:    now,
+		}
+		if err := db.Create(&row).Error; err == nil {
+			order.OrderID = row.ID
+		}
+	}
+	if order.OrderID == 0 {
+		storeMu.Lock()
+		orderSeq++
+		order.OrderID = orderSeq
+		storeMu.Unlock()
+	}
+	storeMu.Lock()
 	orderStore[order.OrderID] = order
 	storeMu.Unlock()
 
@@ -539,6 +608,25 @@ func GetOrderDetail(c *gin.Context) {
 		return
 	}
 
+	db := database.GetDB(userID)
+	if db != nil {
+		var row OrderHistoryRow
+		if err := db.Where("id = ? AND user_id = ?", orderID, userID).First(&row).Error; err == nil {
+			order := Order{
+				OrderID:      row.ID,
+				UserID:       row.UserID,
+				MerchantID:   row.MerchantID,
+				MerchantName: row.MerchantName,
+				Amount:       row.Amount,
+				Status:       row.Status,
+				Paid:         row.Paid,
+				CreatedAt:    row.CreatedAt,
+				PaidAt:       row.PaidAt,
+			}
+			c.JSON(http.StatusOK, gin.H{"code": 0, "data": order})
+			return
+		}
+	}
 	storeMu.RLock()
 	order, ok := orderStore[orderID]
 	storeMu.RUnlock()
@@ -583,10 +671,25 @@ type llmChatResultRaw struct {
 }
 
 type llmPythonInput struct {
-	Requirement string         `json:"requirement"`
-	HasPref     bool           `json:"has_pref"`
-	Preference  UserPreference `json:"preference"`
-	Candidates  []Merchant     `json:"candidates"`
+	Requirement        string                   `json:"requirement"`
+	HasPref            bool                     `json:"has_pref"`
+	Preference         UserPreference           `json:"preference"`
+	Candidates         []Merchant               `json:"candidates"`
+	OrderHistory       []OrderHistoryPrompt     `json:"order_history"`
+	RequirementHistory []RequirementHistoryItem `json:"requirement_history"`
+}
+
+type OrderHistoryPrompt struct {
+	MerchantName string  `json:"merchant_name"`
+	Amount       float64 `json:"amount"`
+	Status       string  `json:"status"`
+	Paid         bool    `json:"paid"`
+	CreatedAt    string  `json:"created_at"`
+}
+
+type RequirementHistoryItem struct {
+	Requirement string `json:"requirement"`
+	CreatedAt   string `json:"created_at"`
 }
 
 func ChatSend(c *gin.Context) {
@@ -606,6 +709,7 @@ func ChatSend(c *gin.Context) {
 		reply = "根据你的需求“" + req.Requirement + "”，为你推荐以下商家。"
 	}
 	req.UserID = authUserID
+	saveRequirementHistory(c.Request.Context(), req.UserID, req.Requirement)
 	var pref UserPreference
 	hasPref := false
 	if pref, ok := fetchPreference(c.Request.Context(), req.UserID); ok {
@@ -614,7 +718,8 @@ func ChatSend(c *gin.Context) {
 	}
 
 	merchants := recommendByRequirement(req.Requirement)
-	if llmReply, llmMerchants, isOrder, err := recommendByModelScope(c.Request.Context(), req.Requirement, pref, hasPref, merchants); err == nil {
+	orderHistory, reqHistory := loadPromptHistory(c.Request.Context(), req.UserID)
+	if llmReply, llmMerchants, isOrder, err := recommendByModelScope(c.Request.Context(), req.Requirement, pref, hasPref, merchants, orderHistory, reqHistory); err == nil {
 		if strings.TrimSpace(llmReply) != "" {
 			reply = llmReply
 		}
@@ -659,12 +764,22 @@ func recommendByRequirement(requirement string) []Merchant {
 	}
 }
 
-func recommendByModelScope(ctx context.Context, requirement string, pref UserPreference, hasPref bool, candidates []Merchant) (string, []Merchant, bool, error) {
+func recommendByModelScope(
+	ctx context.Context,
+	requirement string,
+	pref UserPreference,
+	hasPref bool,
+	candidates []Merchant,
+	orderHistory []OrderHistoryPrompt,
+	requirementHistory []RequirementHistoryItem,
+) (string, []Merchant, bool, error) {
 	input := llmPythonInput{
-		Requirement: requirement,
-		HasPref:     hasPref,
-		Preference:  pref,
-		Candidates:  candidates,
+		Requirement:        requirement,
+		HasPref:            hasPref,
+		Preference:         pref,
+		Candidates:         candidates,
+		OrderHistory:       orderHistory,
+		RequirementHistory: requirementHistory,
 	}
 	inputBytes, _ := json.Marshal(input)
 
@@ -753,11 +868,8 @@ func AutoPlaceAndPay(c *gin.Context) {
 		return
 	}
 
-	storeMu.Lock()
-	orderSeq++
 	now := time.Now()
 	order := Order{
-		OrderID:      orderSeq,
 		UserID:       userID,
 		MerchantID:   req.MerchantID,
 		MerchantName: req.MerchantName,
@@ -767,6 +879,29 @@ func AutoPlaceAndPay(c *gin.Context) {
 		CreatedAt:    now,
 		PaidAt:       now,
 	}
+	db := database.GetDB(userID)
+	if db != nil {
+		row := OrderHistoryRow{
+			UserID:       userID,
+			MerchantID:   req.MerchantID,
+			MerchantName: req.MerchantName,
+			Amount:       req.Amount,
+			Status:       "paid",
+			Paid:         true,
+			CreatedAt:    now,
+			PaidAt:       now,
+		}
+		if err := db.Create(&row).Error; err == nil {
+			order.OrderID = row.ID
+		}
+	}
+	if order.OrderID == 0 {
+		storeMu.Lock()
+		orderSeq++
+		order.OrderID = orderSeq
+		storeMu.Unlock()
+	}
+	storeMu.Lock()
 	orderStore[order.OrderID] = order
 	storeMu.Unlock()
 
@@ -899,7 +1034,7 @@ func initMySQLStorage() error {
 	if db == nil {
 		return fmt.Errorf("mysql db nil")
 	}
-	if err := db.AutoMigrate(&UserAccount{}, &UserPreferenceRow{}); err != nil {
+	if err := db.AutoMigrate(&UserAccount{}, &UserPreferenceRow{}, &OrderHistoryRow{}, &RequirementHistoryRow{}); err != nil {
 		return err
 	}
 	return nil
@@ -913,6 +1048,55 @@ func initRedisCache() error {
 	}
 	redisReady = true
 	return nil
+}
+
+func saveRequirementHistory(ctx context.Context, userID int64, requirement string) {
+	requirement = strings.TrimSpace(requirement)
+	if requirement == "" {
+		return
+	}
+	db := database.GetDB(userID)
+	if db == nil {
+		return
+	}
+	row := RequirementHistoryRow{
+		UserID:      userID,
+		Requirement: requirement,
+		CreatedAt:   time.Now(),
+	}
+	_ = db.WithContext(ctx).Create(&row).Error
+}
+
+func loadPromptHistory(ctx context.Context, userID int64) ([]OrderHistoryPrompt, []RequirementHistoryItem) {
+	db := database.GetDB(userID)
+	if db == nil {
+		return []OrderHistoryPrompt{}, []RequirementHistoryItem{}
+	}
+
+	var orderRows []OrderHistoryRow
+	_ = db.WithContext(ctx).Where("user_id = ?", userID).Order("id desc").Limit(20).Find(&orderRows).Error
+	orderHistory := make([]OrderHistoryPrompt, 0, len(orderRows))
+	for _, row := range orderRows {
+		orderHistory = append(orderHistory, OrderHistoryPrompt{
+			MerchantName: row.MerchantName,
+			Amount:       row.Amount,
+			Status:       row.Status,
+			Paid:         row.Paid,
+			CreatedAt:    row.CreatedAt.Format(time.RFC3339),
+		})
+	}
+
+	var reqRows []RequirementHistoryRow
+	_ = db.WithContext(ctx).Where("user_id = ?", userID).Order("id desc").Limit(20).Find(&reqRows).Error
+	requirementHistory := make([]RequirementHistoryItem, 0, len(reqRows))
+	for _, row := range reqRows {
+		requirementHistory = append(requirementHistory, RequirementHistoryItem{
+			Requirement: row.Requirement,
+			CreatedAt:   row.CreatedAt.Format(time.RFC3339),
+		})
+	}
+
+	return orderHistory, requirementHistory
 }
 
 func preferenceToRow(pref UserPreference) UserPreferenceRow {

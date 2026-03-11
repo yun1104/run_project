@@ -8,13 +8,13 @@ import (
 )
 
 type DistributedLock struct {
-	client *redis.ClusterClient
+	client redis.UniversalClient
 	key    string
 	value  string
 	ttl    time.Duration
 }
 
-func NewDistributedLock(client *redis.ClusterClient, key, value string, ttl time.Duration) *DistributedLock {
+func NewDistributedLock(client redis.UniversalClient, key, value string, ttl time.Duration) *DistributedLock {
 	return &DistributedLock{
 		client: client,
 		key:    key,
