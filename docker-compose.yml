@@ -1,6 +1,6 @@
 services:
   mysql:
-    image: mariadb:11.4
+    image: docker.1ms.run/library/mariadb:11.4
     restart: unless-stopped
     environment:
       MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
@@ -19,7 +19,7 @@ services:
       retries: 10
 
   redis:
-    image: redis:7-alpine
+    image: docker.1ms.run/library/redis:7-alpine
     restart: unless-stopped
     volumes:
       - redis_data:/data

@@ -1,5 +1,5 @@
 # Stage 1: Build
-FROM golang:1.21-alpine AS builder
+FROM docker.1ms.run/library/golang:1.21-alpine AS builder
 WORKDIR /build
 
 # 安装 git（go mod 需要）
@@ -14,7 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=linux go build -o /gateway ./api-gateway
 
 # Stage 2: Runtime
-FROM alpine:3.19
+FROM docker.1ms.run/library/alpine:3.19
 RUN apk add --no-cache ca-certificates tzdata
 ENV TZ=Asia/Shanghai
 
