@@ -1,45 +1,65 @@
-# 想吃啥
+# 外卖推荐系统（分布式）
 
-基于Go语言开发的AI外卖推荐助手，支持聊天式自然语言交互、智能偏好分析与自动下单。
+当前版本仅提供推荐能力，不包含下单功能。
 
-## 架构特点
+## 当前架构
 
-- 微服务架构：8+服务，gRPC通信
-- 分库分表：10库100表，支持亿级数据
-- 三级缓存：本地缓存 + Redis Cluster + MySQL
-- 消息驱动：Kafka异步解耦
-- AI应用：大模型偏好分析与推荐
-- 爬虫技术：反反爬虫策略
-- 服务治理：限流熔断降级
+- 客户端层：`app/web`
+- 网关层：`app/cmd/gateway`（HTTP入口、鉴权、限流）
+- 应用层：`app/cmd/app-orchestrator`（聚合编排）
+- 服务层：
+  - `app/cmd/user-service`
+  - `app/cmd/recommend-service`
+- 服务间通信：gRPC（JSON Codec）
+- 数据层：`app/pkg/database` + `app/pkg/cache`（不可用时自动降级内存）
 
 ## 项目结构
 
+```text
+run_project/
+├── app/
+│   ├── cmd/
+│   │   ├── gateway/
+│   │   ├── app-orchestrator/
+│   │   ├── user-service/
+│   │   └── recommend-service/
+│   ├── internal/
+│   ├── pkg/
+│   ├── proto/
+│   ├── web/
+│   ├── configs/
+│   ├── scripts/
+│   ├── go.mod
+│   └── go.sum
+├── README.md
+└── INTERVIEW.md
 ```
-├── api-gateway          # API网关
-├── services/            # 微服务
-│   ├── user-service
-│   ├── order-service
-│   ├── preference-service
-│   ├── recommend-service
-│   ├── meituan-crawler
-│   ├── payment-service
-│   ├── ai-service
-│   └── notification-service
-├── pkg/                 # 公共包
-│   ├── database/
-│   ├── cache/
-│   └── mq/
-├── proto/              # gRPC协议
-├── configs/            # 配置文件
-└── scripts/            # 脚本
+
+## 启动方式
+
+按顺序启动：
+
+```bash
+cd app
+go run ./cmd/user-service
+go run ./cmd/recommend-service
+go run ./cmd/app-orchestrator
+go run ./cmd/gateway
 ```
 
-## 快速开始
+默认端口：
 
-1. 初始化数据库：`mysql < scripts/init_db.sql`
-2. 配置环境：编辑 `configs/config.yaml`
-3. 启动网关：`go run api-gateway/main.go`
+- gateway: `8080`
+- app-orchestrator: `50050`
+- user-service: `50051`
+- recommend-service: `50053`
 
-## 技术栈
+## 接口
 
-Go 1.21 | Gin | MySQL | Redis | Kafka | gRPC | Consul | Playwright
+- `POST /api/v1/user/register`
+- `POST /api/v1/user/login`
+- `GET /api/v1/user/preference`
+- `PUT /api/v1/user/preference`
+- `POST /api/v1/recommend/get`
+
+说明：`/api/v1/order/*` 已移除。

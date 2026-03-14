@@ -175,4 +175,6 @@ xiangchisha/
      5. 确认
   → Kafka(order.paid) 
   → notification-service通知用户
+
+
 ```
