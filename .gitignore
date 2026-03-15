@@ -12,3 +12,4 @@ vendor/
 tmp/
 dist/
 .runtime/
+.playwright-mcp/

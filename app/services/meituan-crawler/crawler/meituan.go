@@ -191,7 +191,7 @@ func (c *MeituanCrawler) SearchStore(ctx context.Context, merchantName string) (
 func normalizeMerchantName(s string) string {
 	var b strings.Builder
 	for _, r := range strings.TrimSpace(s) {
-		if unicode.IsSpace(r) || r == '·' || r == '．' || r == '．' {
+		if unicode.IsSpace(r) || r == '·' || r == '．' {
 			continue
 		}
 		b.WriteRune(unicode.ToLower(r))

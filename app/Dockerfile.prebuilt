@@ -1,0 +1,10 @@
+FROM docker.1ms.run/library/alpine:3.19
+RUN apk add --no-cache ca-certificates tzdata
+ENV TZ=Asia/Shanghai
+
+WORKDIR /app
+COPY gateway_linux /app/gateway
+COPY web /app/web
+
+EXPOSE 8080 9091 9092
+ENTRYPOINT ["/app/gateway"]

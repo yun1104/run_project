@@ -1,0 +1,89 @@
+services:
+  mysql:
+    image: docker.1ms.run/library/mariadb:11.4
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-123456}
+      MYSQL_DATABASE: meituan_db_0
+      MYSQL_USER: ${MYSQL_USER:-app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456}
+    volumes:
+      - mysql_data:/var/lib/mysql
+      - ./docker/mysql-init:/docker-entrypoint-initdb.d:ro
+    ports:
+      - "3306:3306"
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: docker.1ms.run/library/redis:7-alpine
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  python-recommend:
+    build: ./services/ai-service/python-recommend
+    restart: unless-stopped
+    environment:
+      MODELSCOPE_API_KEY: ${MODELSCOPE_API_KEY}
+      MODELSCOPE_BASE_URL: ${MODELSCOPE_BASE_URL:-https://api-inference.modelscope.cn/v1}
+      MODELSCOPE_MODEL: ${MODELSCOPE_MODEL:-Qwen/Qwen3-30B-A3B-Instruct-2507}
+    ports:
+      - "18080:18080"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://127.0.0.1:18080/health\")'"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  api-gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile.prebuilt
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      python-recommend:
+        condition: service_healthy
+    environment:
+      HTTP_ADDR: "0.0.0.0:8080"
+      TCP_ADDR: "0.0.0.0:9091"
+      UDP_ADDR: "0.0.0.0:9092"
+      MYSQL_HOST: mysql
+      MYSQL_PORT: "3306"
+      MYSQL_USER: ${MYSQL_USER:-app}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-123456}
+      MYSQL_DB: meituan_db_0
+      REDIS_ADDRS: redis:6379
+      REDIS_PASSWORD: ""
+      PY_RECOMMEND_URL: http://python-recommend:18080/v1/recommend
+      AMAP_API_KEY: ${AMAP_API_KEY}
+      MODELSCOPE_API_KEY: ${MODELSCOPE_API_KEY}
+    ports:
+      - "8080:8080"
+      - "9091:9091"
+      - "9092:9092"
+    healthcheck:
+      test: ["CMD", "wget", "-q", "-O-", "http://127.0.0.1:8080/"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 30s
+
+volumes:
+  mysql_data:
+  redis_data:

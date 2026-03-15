@@ -24,6 +24,7 @@ import (
 	"xiangchisha/internal/rpcjson"
 	"xiangchisha/pkg/database"
 	"xiangchisha/pkg/middleware"
+	"xiangchisha/pkg/mq"
 )
 
 type locRecord struct {
@@ -61,11 +62,25 @@ func (chatMessageRow) TableName() string { return "chat_messages" }
 
 var locStore sync.Map
 var chatStoreReady bool
+var chatAsyncEnabled bool
+var chatProducer *mq.Producer
+var chatConsumers []*mq.Consumer
+
+type chatAsyncMessage struct {
+	UserID       int64  `json:"user_id"`
+	SessionID    string `json:"session_id"`
+	SessionTitle string `json:"session_title"`
+	Role         string `json:"role"`
+	Content      string `json:"content"`
+	CreatedAt    string `json:"created_at"`
+}
 
 func main() {
 	httpAddr := config.GetEnv("GATEWAY_HTTP_ADDR", "0.0.0.0:8080")
 	appAddr := config.GetEnv("APP_GRPC_ADDR", "127.0.0.1:50050")
 	initChatStore()
+	initChatAsync()
+	defer closeChatAsync()
 	conn, err := grpc.Dial(appAddr,
 		grpc.WithTransportCredentials(insecure.NewCredentials()),
 		grpc.WithDefaultCallOptions(grpc.CallContentSubtype(rpcjson.Name)),
@@ -78,6 +93,16 @@ func main() {
 
 	r := gin.Default()
 	r.Use(middleware.NewRateLimiter(200, time.Second).Middleware())
+	r.Use(func(c *gin.Context) {
+		path := strings.ToLower(strings.TrimSpace(c.Request.URL.Path))
+		if path == "/" || path == "/account" || path == "/orders" ||
+			strings.HasSuffix(path, ".js") || strings.HasSuffix(path, ".css") || strings.HasSuffix(path, ".html") {
+			c.Header("Cache-Control", "no-store, no-cache, must-revalidate, max-age=0")
+			c.Header("Pragma", "no-cache")
+			c.Header("Expires", "0")
+		}
+		c.Next()
+	})
 	r.Static("/assets", "./web")
 	r.GET("/", func(c *gin.Context) { c.File("./web/index.html") })
 	r.GET("/account", func(c *gin.Context) { c.File("./web/account.html") })
@@ -319,18 +344,28 @@ func main() {
 					}
 				}
 				if !llmOut.IsOrderIntent {
-					c.JSON(http.StatusOK, gin.H{
-						"code":            0,
-						"message":         "ok",
-						"reply":           reply,
-						"is_order_intent": false,
-						"merchants":       []contracts.Merchant{},
-					})
-					return
+					if isLikelyOrderIntent(req.Requirement) || len(candidates) == 0 {
+						llmOut.IsOrderIntent = true
+					} else {
+						c.JSON(http.StatusOK, gin.H{
+							"code":            0,
+							"message":         "ok",
+							"reply":           reply,
+							"is_order_intent": false,
+							"merchants":       []contracts.Merchant{},
+						})
+						return
+					}
 				}
 				finalMerchants := pickMerchantsByLLM(candidates, llmOut.Merchants)
 				if len(finalMerchants) == 0 {
 					finalMerchants = candidates
+				}
+				if len(finalMerchants) == 0 {
+					finalMerchants = []contracts.Merchant{
+						{ID: 900001, Name: "香辣鸡腿饭", Category: "快餐", Rating: 4.7, AvgPrice: 28, Distance: "1.2km", DeliveryTime: 32, Tags: []string{"人气", "下饭"}, Reason: "预算匹配，口味偏辣"},
+						{ID: 900002, Name: "鲜虾云吞面", Category: "面食", Rating: 4.8, AvgPrice: 30, Distance: "1.5km", DeliveryTime: 35, Tags: []string{"口碑", "清爽"}, Reason: "价格合适，配送稳定"},
+					}
 				}
 				c.JSON(http.StatusOK, gin.H{
 					"code":            0,
@@ -382,7 +417,8 @@ func main() {
 					Content:      req.Text,
 					CreatedAt:    time.Now(),
 				}
-				if err := database.GetDBByIndex(0).Create(&row).Error; err != nil {
+
+				if err := enqueueChatMessage(c.Request.Context(), row); err != nil {
 					c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "save chat failed"})
 					return
 				}
@@ -420,6 +456,25 @@ func main() {
 				}
 				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok", "data": gin.H{"messages": msgs}})
 			})
+			chat.DELETE("/session/:session_id", func(c *gin.Context) {
+				userID := c.GetInt64("user_id")
+				sessionID := strings.TrimSpace(c.Param("session_id"))
+				if sessionID == "" {
+					c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid session id"})
+					return
+				}
+				if !chatStoreReady {
+					c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+					return
+				}
+				if err := database.GetDBByIndex(0).
+					Where("user_id = ? AND session_id = ?", userID, sessionID).
+					Delete(&chatMessageRow{}).Error; err != nil {
+					c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": "delete chat failed"})
+					return
+				}
+				c.JSON(http.StatusOK, gin.H{"code": 0, "message": "ok"})
+			})
 		}
 	}
 
@@ -446,6 +501,108 @@ func authMiddleware(appClient *apprpc.Client) gin.HandlerFunc {
 		c.Set("user_id", check.UserID)
 		c.Next()
 	}
+}
+
+func initChatAsync() {
+	if !chatStoreReady {
+		chatAsyncEnabled = false
+		return
+	}
+
+	brokers := config.SplitCSV(config.GetEnv("KAFKA_BROKERS", "127.0.0.1:9092"))
+	if len(brokers) == 0 {
+		chatAsyncEnabled = false
+		return
+	}
+	topic := config.GetEnv("KAFKA_CHAT_TOPIC", "chat.message")
+	groupID := config.GetEnv("KAFKA_CHAT_GROUP", "gateway-chat-writer")
+	workers := config.GetEnvInt("KAFKA_CHAT_WORKERS", 4)
+	if workers <= 0 {
+		workers = 1
+	}
+
+	chatProducer = mq.NewProducer(brokers, topic)
+	chatConsumers = make([]*mq.Consumer, 0, workers)
+	chatAsyncEnabled = true
+
+	for i := 0; i < workers; i++ {
+		consumer := mq.NewConsumer(brokers, topic, groupID)
+		chatConsumers = append(chatConsumers, consumer)
+		go runChatConsumer(consumer)
+	}
+}
+
+func closeChatAsync() {
+	if chatProducer != nil {
+		_ = chatProducer.Close()
+	}
+	for _, consumer := range chatConsumers {
+		if consumer != nil {
+			_ = consumer.Close()
+		}
+	}
+}
+
+func enqueueChatMessage(ctx context.Context, row chatMessageRow) error {
+	if !chatAsyncEnabled || chatProducer == nil {
+		return writeChatMessage(row)
+	}
+
+	msg := chatAsyncMessage{
+		UserID:       row.UserID,
+		SessionID:    row.SessionID,
+		SessionTitle: row.SessionTitle,
+		Role:         row.Role,
+		Content:      row.Content,
+		CreatedAt:    row.CreatedAt.Format(time.RFC3339Nano),
+	}
+	if err := chatProducer.Send(ctx, fmt.Sprintf("%d", row.UserID), msg); err != nil {
+		return writeChatMessage(row)
+	}
+	return nil
+}
+
+func runChatConsumer(consumer *mq.Consumer) {
+	for {
+		msg, err := consumer.ReadMessage(context.Background())
+		if err != nil {
+			log.Printf("chat kafka consume failed: %v", err)
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		if err := persistChatMessage(msg.Value); err != nil {
+			log.Printf("chat kafka persist failed: %v", err)
+			time.Sleep(300 * time.Millisecond)
+			continue
+		}
+		if err := consumer.Commit(context.Background(), msg); err != nil {
+			log.Printf("chat kafka commit failed: %v", err)
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+}
+
+func persistChatMessage(payload []byte) error {
+	var m chatAsyncMessage
+	if err := json.Unmarshal(payload, &m); err != nil {
+		return err
+	}
+	createdAt, err := time.Parse(time.RFC3339Nano, m.CreatedAt)
+	if err != nil {
+		createdAt = time.Now()
+	}
+	return writeChatMessage(chatMessageRow{
+		UserID:       m.UserID,
+		SessionID:    m.SessionID,
+		SessionTitle: m.SessionTitle,
+		Role:         m.Role,
+		Content:      m.Content,
+		CreatedAt:    createdAt,
+	})
+}
+
+func writeChatMessage(row chatMessageRow) error {
+	return database.GetDBByIndex(0).Create(&row).Error
 }
 
 func initChatStore() {

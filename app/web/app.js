@@ -44,6 +44,9 @@ let prefAnswers = {
 };
 let loginLocationModalResolver = null;
 const CHAT_HISTORY_LIMIT = 500;
+const MAX_CHAT_SESSIONS = 8;
+const ASSISTANT_WELCOME_TEXT = "你好，我是你的外卖助手。告诉我预算、口味、时间，我来推荐。";
+let sessionCounter = 0;
 
 function normalizeDisplayName(name) {
   return String(name || "").replace(/[\r\n\t]/g, "").trim();
@@ -56,11 +59,32 @@ function shouldKeepSingleLine(text) {
   return t.length <= 24;
 }
 
+function nextSessionId() {
+  sessionCounter += 1;
+  return `${Date.now()}-${sessionCounter}-${Math.random().toString(36).slice(2, 8)}`;
+}
+
+function ensureCurrentSessionValid() {
+  if (sessions.length === 0) {
+    currentSessionId = null;
+    return;
+  }
+  if (!sessions.some((s) => s.id === currentSessionId)) {
+    currentSessionId = sessions[0].id;
+  }
+}
+
 function createSession(title = "新会话") {
-  const id = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
-  const session = { id, title, messages: [] };
+  const id = nextSessionId();
+  const session = {
+    id,
+    title,
+    messages: [{ role: "assistant", text: ASSISTANT_WELCOME_TEXT }],
+  };
   sessions.unshift(session);
   currentSessionId = id;
+  trimSessionsToLimit(true);
+  ensureCurrentSessionValid();
   renderSessions();
   renderMessages();
 }
@@ -78,13 +102,19 @@ function ensureSessionTitleFromText(session, text) {
 }
 
 function renderSessions() {
+  trimSessionsToLimit(false);
+  ensureCurrentSessionValid();
   sessionList.innerHTML = "";
   sessions.forEach((s) => {
     const item = document.createElement("div");
     item.className = "session-item";
+    if (s.id === currentSessionId) {
+      item.classList.add("active");
+    }
     item.textContent = s.title;
     item.onclick = () => {
       currentSessionId = s.id;
+      renderSessions();
       renderMessages();
     };
     sessionList.appendChild(item);
@@ -143,9 +173,19 @@ function appendCards(merchants) {
 }
 
 function renderMessages() {
-  const session = getCurrentSession();
   messageList.innerHTML = "";
+  trimSessionsToLimit(false);
+  ensureCurrentSessionValid();
+  let session = getCurrentSession();
+  if (!session && sessions.length > 0) {
+    currentSessionId = sessions[0].id;
+    session = sessions[0];
+    renderSessions();
+  }
   if (!session) return;
+  if (!Array.isArray(session.messages)) {
+    session.messages = [];
+  }
   session.messages.forEach((m) => {
     const row = document.createElement("div");
     row.className = `message-row ${m.role}`;
@@ -235,9 +275,42 @@ async function persistChatMessage(sessionId, sessionTitle, role, text) {
   }
 }
 
+async function deleteChatSession(sessionId) {
+  const sid = String(sessionId || "").trim();
+  if (!sid || !token || !userId) return;
+  try {
+    await fetch(`/api/v1/chat/session/${encodeURIComponent(sid)}`, {
+      method: "DELETE",
+      headers: authHeaders(),
+    });
+  } catch (e) {
+  }
+}
+
+function trimSessionsToLimit(syncDelete) {
+  if (sessions.length <= MAX_CHAT_SESSIONS) return;
+  const removed = [];
+  while (sessions.length > MAX_CHAT_SESSIONS) {
+    let removeIdx = sessions.length - 1;
+    if (sessions[removeIdx] && sessions[removeIdx].id === currentSessionId) {
+      if (sessions.length === 1) break;
+      removeIdx = sessions.length - 2;
+    }
+    const chunk = sessions.splice(removeIdx, 1);
+    if (chunk.length > 0) {
+      removed.push(chunk[0]);
+    }
+  }
+  if (!syncDelete) return;
+  removed.forEach((s) => {
+    if (s && s.id) {
+      void deleteChatSession(s.id);
+    }
+  });
+}
+
 function createDefaultChat() {
   createSession("默认会话");
-  appendMessage("assistant", "你好，我是你的外卖助手。告诉我预算、口味、时间，我来推荐。");
 }
 
 async function loadChatHistory() {
@@ -271,6 +344,7 @@ async function loadChatHistory() {
     if (loaded.length === 0) return false;
 
     sessions = loaded.map((s) => ({ id: s.id, title: s.title, messages: s.messages }));
+    trimSessionsToLimit(false);
     currentSessionId = sessions[0].id;
     renderSessions();
     renderMessages();
@@ -296,7 +370,7 @@ promptInput.addEventListener("keydown", (e) => {
     sendMessage();
   }
 });
-newChatBtn.onclick = () => createSession();
+newChatBtn.onclick = () => createSession("新会话");
 if (locationBtn) {
   locationBtn.onclick = () => {
     window.location.href = "/assets/location.html";

@@ -7,47 +7,71 @@ html, body {
   padding: 0;
   height: 100%;
   font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
-  background: #f5f7fb;
-  color: #111827;
+  background: #f3f7ff;
+  color: #1f2937;
 }
 
 .layout {
   display: flex;
   height: 100vh;
+  gap: 16px;
+  padding: 16px;
+  overflow: hidden;
 }
 
 .sidebar {
   width: 260px;
-  background: #0f172a;
-  color: #e5e7eb;
+  background: #f8fbff;
+  color: #374151;
   padding: 16px;
-  border-right: 1px solid #1f2937;
+  border: 1px solid #dbeafe;
+  border-radius: 14px;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
 }
 
 .brand {
   font-size: 18px;
   font-weight: 700;
   margin-bottom: 12px;
+  color: #1d4ed8;
 }
 
 .new-chat {
   width: 100%;
-  border: 1px solid #334155;
-  background: #111827;
-  color: #e5e7eb;
+  border: 1px solid #bfdbfe;
+  background: #eaf2ff;
+  color: #1e40af;
   border-radius: 8px;
   padding: 10px 12px;
   cursor: pointer;
+  font-weight: 600;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
 }
 
 .new-chat.secondary {
   margin-top: 8px;
-  background: #0b1220;
+  background: #ffffff;
+  border-color: #e5e7eb;
+  color: #4b5563;
+  font-weight: 500;
+}
+
+.new-chat:hover {
+  background: #dbeafe;
+  border-color: #93c5fd;
 }
 
 .new-chat.secondary.danger {
-  background: #3b0b0b;
-  border-color: #7f1d1d;
+  background: #dc2626;
+  border-color: #b91c1c;
+  color: #ffffff;
+}
+
+.new-chat.secondary.danger:hover {
+  background: #b91c1c;
+  border-color: #991b1b;
 }
 
 .session-list {
@@ -58,20 +82,39 @@ html, body {
 }
 
 .session-item {
-  background: #1f2937;
-  border: 1px solid #374151;
+  background: #ffffff;
+  border: 1px solid #e5e7eb;
   padding: 10px;
   border-radius: 8px;
   font-size: 13px;
+  color: #4b5563;
+  cursor: pointer;
+  transition: background-color 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+}
+
+.session-item:hover {
+  background: #eef4ff;
+  border-color: #bfdbfe;
+  color: #1e3a8a;
+}
+
+.session-item.active {
+  background: #dbeafe;
+  border-color: #93c5fd;
+  color: #1e3a8a;
+  font-weight: 600;
 }
 
 .chat-area {
   flex: 1;
   display: flex;
   flex-direction: column;
-  max-width: 980px;
-  margin: 0 auto;
-  width: 100%;
+  min-width: 0;
+  background: #ffffff;
+  border: 1px solid #dbeafe;
+  border-radius: 16px;
+  box-shadow: 0 8px 28px rgba(30, 64, 175, 0.08);
+  overflow: hidden;
 }
 
 .chat-header {
@@ -79,14 +122,18 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 24px;
-  font-weight: 700;
+  font-size: 22px;
+  font-weight: 600;
+  color: #1e3a8a;
+  border-bottom: 1px solid #e5edff;
+  background: #ffffff;
 }
 
 .message-list {
   flex: 1;
   overflow-y: auto;
   padding: 16px;
+  background: #f8fbff;
 }
 
 .message-row {
@@ -119,7 +166,7 @@ html, body {
 
 .message-meta {
   font-size: 12px;
-  color: #6b7280;
+  color: #9ca3af;
   margin-bottom: 4px;
   padding: 0 2px;
 }
@@ -137,13 +184,13 @@ html, body {
 }
 
 .avatar.user {
-  background: #2563eb;
+  background: #3b82f6;
   color: #fff;
 }
 
 .avatar.assistant {
-  background: #0f172a;
-  color: #e5e7eb;
+  background: #e5e7eb;
+  color: #6b7280;
 }
 
 .message {
@@ -172,13 +219,14 @@ html, body {
 }
 
 .message.user {
-  background: #2563eb;
-  color: #fff;
+  background: #3b82f6;
+  color: #ffffff;
 }
 
 .message.assistant {
   background: #fff;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #f3f4f6;
+  color: #1f2937;
 }
 
 .cards {
@@ -231,8 +279,8 @@ html, body {
 }
 
 .chat-input-wrap {
-  border-top: 1px solid #e5e7eb;
-  background: #fff;
+  border-top: 1px solid #e5edff;
+  background: #ffffff;
   padding: 14px;
   display: flex;
   gap: 10px;
@@ -242,26 +290,33 @@ html, body {
   flex: 1;
   min-height: 56px;
   resize: none;
-  border: 1px solid #d1d5db;
+  border: 1px solid #dbeafe;
   border-radius: 10px;
   padding: 10px;
   font-size: 14px;
+  color: #1f2937;
+  background: #ffffff;
 }
 
 #sendBtn {
   width: 90px;
   border: none;
   border-radius: 10px;
-  background: #2563eb;
-  color: #fff;
+  background: #3b82f6;
+  color: #ffffff;
   font-size: 14px;
   cursor: pointer;
+  transition: background-color 0.15s ease;
+}
+
+#sendBtn:hover {
+  background: #2563eb;
 }
 
 .pref-modal {
   position: fixed;
   inset: 0;
-  background: rgba(15, 23, 42, 0.55);
+  background: rgba(15, 23, 42, 0.12);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -275,9 +330,10 @@ html, body {
 .pref-panel {
   width: min(640px, 92vw);
   background: #fff;
-  border-radius: 14px;
+  border-radius: 12px;
   padding: 18px;
-  border: 1px solid #e5e7eb;
+  border: 1px solid #f3f4f6;
+  box-shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
 }
 
 .pref-panel h3 {
@@ -306,8 +362,8 @@ html, body {
 }
 
 .pref-option.active {
-  border-color: #2563eb;
-  background: #eff6ff;
+  border-color: #93c5fd;
+  background: #f0f7ff;
 }
 
 .pref-actions {
@@ -317,19 +373,30 @@ html, body {
 }
 
 .ghost-btn {
-  border: 1px solid #d1d5db;
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
   background: #fff;
   padding: 8px 12px;
   cursor: pointer;
+  color: #4b5563;
 }
 
 .auth-input {
   width: 100%;
-  border: 1px solid #d1d5db;
+  border: 1px solid #e5e7eb;
   border-radius: 10px;
   padding: 10px;
   font-size: 14px;
+  color: #1f2937;
+}
+
+.pref-actions button:not(.ghost-btn) {
+  border: 1px solid #3b82f6;
+  border-radius: 10px;
+  background: #3b82f6;
+  color: #ffffff;
+  padding: 8px 12px;
+  cursor: pointer;
 }
 
 .toast {
@@ -341,9 +408,10 @@ html, body {
   max-width: 420px;
   padding: 10px 12px;
   border-radius: 10px;
-  color: #fff;
-  background: #111827;
+  color: #374151;
+  background: #ffffff;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  border: 1px solid #e5e7eb;
 }
 
 .account-wrap {
@@ -394,8 +462,8 @@ html, body {
 .primary-btn {
   border: none;
   border-radius: 10px;
-  background: #2563eb;
-  color: #fff;
+  background: #3b82f6;
+  color: #ffffff;
   padding: 9px 14px;
   cursor: pointer;
 }
@@ -442,8 +510,8 @@ html, body {
 }
 
 .question-option.active {
-  border-color: #2563eb;
-  background: #eff6ff;
+  border-color: #93c5fd;
+  background: #f0f7ff;
 }
 
 @media (max-width: 900px) {
@@ -457,10 +525,12 @@ html, body {
 
 .toast.success {
   background: #16a34a;
+  color: #fff;
 }
 
 .toast.error {
   background: #dc2626;
+  color: #fff;
 }
 
 .toast {
@@ -468,10 +538,11 @@ html, body {
   right: 20px;
   top: 20px;
   z-index: 1200;
-  background: #111827;
-  color: #fff;
+  background: #ffffff;
+  color: #374151;
   border-radius: 10px;
   padding: 10px 14px;
   font-size: 13px;
-  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.2);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.12);
+  border: 1px solid #e5e7eb;
 }
