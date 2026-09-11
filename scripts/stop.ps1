@@ -13,3 +13,8 @@ if (Test-Path $pidFile) {
 } else {
   Write-Host "No running gateway process was found."
 }
+
+Get-Process -Name "api-gateway" -ErrorAction SilentlyContinue | ForEach-Object {
+  Stop-Process -Id $_.Id -Force
+  Write-Host "Stopped stale gateway process PID=$($_.Id)"
+}

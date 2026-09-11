@@ -226,7 +226,6 @@ func Register(c *gin.Context) {
 	}
 	if redisReady {
 		ctx := c.Request.Context()
-		_ = cache.Set(ctx, fmt.Sprintf("user:acct:uname:%s", account.Username), account, prefCacheTTL)
 		_ = cache.Set(ctx, fmt.Sprintf("user:acct:id:%d", account.UserID), account, prefCacheTTL)
 	}
 	c.JSON(http.StatusOK, gin.H{"code": 0, "message": "success", "data": gin.H{"user_id": account.UserID}})
@@ -800,12 +799,6 @@ func fetchPreference(ctx context.Context, userID int64) (UserPreference, bool) {
 }
 
 func getUserByUsername(ctx context.Context, username string) (UserAccount, bool) {
-	if redisReady {
-		var acc UserAccount
-		if err := cache.Get(ctx, fmt.Sprintf("user:acct:uname:%s", username), &acc); err == nil && acc.UserID > 0 {
-			return acc, true
-		}
-	}
 	db := database.GetDBByIndex(0)
 	if db == nil {
 		return UserAccount{}, false
@@ -815,7 +808,6 @@ func getUserByUsername(ctx context.Context, username string) (UserAccount, bool)
 		return UserAccount{}, false
 	}
 	if redisReady {
-		_ = cache.Set(ctx, fmt.Sprintf("user:acct:uname:%s", username), acc, prefCacheTTL)
 		_ = cache.Set(ctx, fmt.Sprintf("user:acct:id:%d", acc.UserID), acc, prefCacheTTL)
 	}
 	return acc, true
@@ -838,7 +830,6 @@ func getUserByID(ctx context.Context, userID int64) (UserAccount, bool) {
 	}
 	if redisReady {
 		_ = cache.Set(ctx, fmt.Sprintf("user:acct:id:%d", userID), acc, prefCacheTTL)
-		_ = cache.Set(ctx, fmt.Sprintf("user:acct:uname:%s", acc.Username), acc, prefCacheTTL)
 	}
 	return acc, true
 }

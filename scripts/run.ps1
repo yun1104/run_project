@@ -66,6 +66,14 @@ function Stop-OldGateway {
     }
     Remove-Item -Force $pidFile -ErrorAction SilentlyContinue
   }
+
+  Get-Process -Name "api-gateway" -ErrorAction SilentlyContinue | ForEach-Object {
+    try {
+      Stop-Process -Id $_.Id -Force -ErrorAction Stop
+      Write-Host "Stopped stale gateway process PID=$($_.Id)"
+    } catch {
+    }
+  }
 }
 
 function Wait-HttpReady {
@@ -100,8 +108,12 @@ function Run-SmokeTests {
   $uname = "smoke_user_$([DateTimeOffset]::Now.ToUnixTimeMilliseconds())"
   $pwd = "123456"
   try {
-    Invoke-RestMethod -Uri "$base/api/v1/user/register" -Method POST -ContentType "application/json" -Body (@{ username = $uname; password = $pwd } | ConvertTo-Json) | Out-Null
+    $registerResp = Invoke-RestMethod -Uri "$base/api/v1/user/register" -Method POST -ContentType "application/json" -Body (@{ username = $uname; password = $pwd } | ConvertTo-Json)
+    if ($registerResp.code -ne 0) {
+      throw "register smoke test failed: code=$($registerResp.code)"
+    }
   } catch {
+    throw "register smoke test failed: $($_.Exception.Message)"
   }
 
   $loginResp = Invoke-RestMethod -Uri "$base/api/v1/user/login" -Method POST -ContentType "application/json" -Body (@{ username = $uname; password = $pwd } | ConvertTo-Json)
