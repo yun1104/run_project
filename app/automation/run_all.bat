@@ -50,6 +50,9 @@ start "" /B "%APP_ROOT%\.runtime\bin\app-orchestrator.exe"
 start "" /B "%APP_ROOT%\.runtime\bin\gateway.exe"
 timeout /t 5 /nobreak >nul
 
+"%GOEXE%" test ./automation/amap -v -count=1
+if errorlevel 1 exit /b 1
+
 "%GOEXE%" test ./automation/interface -v -count=1
 if errorlevel 1 exit /b 1
 
