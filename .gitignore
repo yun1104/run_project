@@ -26,6 +26,7 @@ bin/
 build/
 
 # Local outputs and temporary Office lock files
+outputs/
 outputs/~$*
 ~$*
 
