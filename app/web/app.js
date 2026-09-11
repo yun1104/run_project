@@ -575,7 +575,7 @@ async function doRegister() {
   });
   const data = await resp.json();
   if (data.code !== 0) {
-    showToast("注册失败，用户名可能已存在", "error");
+    showToast(data.message === "username already exists" ? "用户名已存在" : (data.message || "注册失败"), "error");
     return;
   }
   showToast("注册成功，请登录", "success");

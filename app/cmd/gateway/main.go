@@ -328,9 +328,9 @@ func main() {
 					c.JSON(http.StatusOK, gin.H{
 						"code":            resp.Code,
 						"message":         resp.Message,
-						"reply":           "已为你生成推荐结果。",
+						"reply":           fallbackRecommendReply(req.Requirement, candidates),
 						"is_order_intent": true,
-						"merchants":       candidates,
+						"merchants":       selectFallbackMerchants(candidates, req.Requirement),
 					})
 					return
 				}
@@ -359,9 +359,10 @@ func main() {
 				}
 				finalMerchants := pickMerchantsByLLM(candidates, llmOut.Merchants)
 				if len(finalMerchants) == 0 {
-					finalMerchants = candidates
+					finalMerchants = selectFallbackMerchants(candidates, req.Requirement)
 				}
-				if len(finalMerchants) == 0 {
+				wantSpicy, avoidSpicy := spicyPreference(req.Requirement)
+				if len(finalMerchants) == 0 && !wantSpicy && !avoidSpicy {
 					finalMerchants = []contracts.Merchant{
 						{ID: 900001, Name: "香辣鸡腿饭", Category: "快餐", Rating: 4.7, AvgPrice: 28, Distance: "1.2km", DeliveryTime: 32, Tags: []string{"人气", "下饭"}, Reason: "预算匹配，口味偏辣"},
 						{ID: 900002, Name: "鲜虾云吞面", Category: "面食", Rating: 4.8, AvgPrice: 30, Distance: "1.5km", DeliveryTime: 35, Tags: []string{"口碑", "清爽"}, Reason: "价格合适，配送稳定"},
@@ -755,6 +756,55 @@ func parseMerchantID(v interface{}) (int64, bool) {
 	default:
 		return 0, false
 	}
+}
+
+func selectFallbackMerchants(candidates []contracts.Merchant, requirement string) []contracts.Merchant {
+	wantSpicy, avoidSpicy := spicyPreference(requirement)
+	out := make([]contracts.Merchant, 0, 3)
+	for _, merchant := range candidates {
+		isSpicy := merchantIsSpicy(merchant)
+		if (wantSpicy && !isSpicy) || (avoidSpicy && isSpicy) {
+			continue
+		}
+		if wantSpicy {
+			merchant.Reason = "匹配你想吃辣的口味"
+		} else if avoidSpicy {
+			merchant.Reason = "已排除辣味商家"
+		}
+		out = append(out, merchant)
+		if len(out) == 3 {
+			break
+		}
+	}
+	return out
+}
+
+func fallbackRecommendReply(requirement string, candidates []contracts.Merchant) string {
+	if len(selectFallbackMerchants(candidates, requirement)) == 0 {
+		if wantSpicy, avoidSpicy := spicyPreference(requirement); wantSpicy {
+			return "附近暂未找到明确标注辣味的商家。"
+		} else if avoidSpicy {
+			return "附近暂未找到明确标注为非辣的商家。"
+		}
+	}
+	return "已按你的需求筛选附近商家。"
+}
+
+func spicyPreference(requirement string) (wantSpicy, avoidSpicy bool) {
+	text := strings.ToLower(strings.TrimSpace(requirement))
+	avoidSpicy = strings.Contains(text, "不辣") || strings.Contains(text, "不要辣") || strings.Contains(text, "免辣") || strings.Contains(text, "不吃辣")
+	wantSpicy = !avoidSpicy && (strings.Contains(text, "辣") || strings.Contains(text, "川菜") || strings.Contains(text, "湘菜"))
+	return
+}
+
+func merchantIsSpicy(merchant contracts.Merchant) bool {
+	text := strings.ToLower(strings.Join(append([]string{merchant.Name, merchant.Category, merchant.Reason}, merchant.Tags...), " "))
+	for _, keyword := range []string{"辣", "川菜", "湘菜", "麻婆", "火锅", "串串"} {
+		if strings.Contains(text, keyword) {
+			return true
+		}
+	}
+	return false
 }
 
 func isLikelyOrderIntent(text string) bool {

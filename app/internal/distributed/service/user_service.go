@@ -432,10 +432,12 @@ func (r userRow) getPasswordHash() string {
 func (s *UserService) persistUserRow(row userRow) error {
 	base := map[string]interface{}{
 		"username":            row.Username,
-		"phone":               row.Phone,
 		"has_preference":      row.HasPreference,
 		"location_permission": row.LocationPermission,
 		"created_at":          row.CreatedAt,
+	}
+	if phone := strings.TrimSpace(row.Phone); phone != "" {
+		base["phone"] = phone
 	}
 	variants := []map[string]interface{}{
 		mergeInsertMap(base, map[string]interface{}{"password": row.Password, "password_hash": row.PasswordHash}),
