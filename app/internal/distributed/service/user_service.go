@@ -322,7 +322,7 @@ func (s *UserService) GetLocationPermission(ctx context.Context, req *contracts.
 }
 
 func (s *UserService) UpdateLocationPermission(ctx context.Context, req *contracts.UpdateLocationPermissionRequest) (*contracts.BaseResponse, error) {
-	perm := normalizeLocationPermission(req.LocationPermission)
+	perm := strings.ToLower(strings.TrimSpace(req.LocationPermission))
 	if perm != "always" && perm != "denied" && perm != "unset" {
 		return &contracts.BaseResponse{Code: 400, Message: "invalid location permission"}, nil
 	}
