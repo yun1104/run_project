@@ -8,6 +8,30 @@
 go.work
 vendor/
 .env
+.env.*
+!.env.example
 *.log
 tmp/
 dist/
+
+# Local runtime state
+.runtime/
+.tools/
+
+# Test/build/cache artifacts
+coverage.out
+*.coverprofile
+*.prof
+bin/
+build/
+
+# Local outputs and temporary Office lock files
+outputs/~$*
+~$*
+
+# OS/editor metadata
+.DS_Store
+Thumbs.db
+desktop.ini
+.idea/
+.vscode/

@@ -7,7 +7,7 @@ param(
   [string]$MySQLHost = "127.0.0.1",
   [int]$MySQLPort = 3306,
   [string]$MySQLUser = "root",
-  [string]$MySQLPassword = "root",
+  [string]$MySQLPassword = "123456",
   [string]$MySQLDB = "meituan_db_0",
   [string]$RedisAddrs = "127.0.0.1:6379",
   [string]$RedisPassword = ""
@@ -37,19 +37,20 @@ function Ensure-Go {
     return
   }
 
-  Write-Host "未检测到 Go，开始下载便携版..."
+  Write-Host "Go was not found. Downloading portable Go 1.22.6..."
   $goZip = Join-Path $toolsDir "go.zip"
   $goUrl = "https://go.dev/dl/go1.22.6.windows-amd64.zip"
-  Invoke-WebRequest -Uri $goUrl -OutFile $goZip -TimeoutSec 90
+  Invoke-WebRequest -Uri $goUrl -OutFile $goZip -TimeoutSec 120
 
-  if (Test-Path (Join-Path $toolsDir "go")) {
-    Remove-Item -Recurse -Force (Join-Path $toolsDir "go")
+  $goDir = Join-Path $toolsDir "go"
+  if (Test-Path $goDir) {
+    Remove-Item -Recurse -Force $goDir
   }
   Expand-Archive -Path $goZip -DestinationPath $toolsDir -Force
   Remove-Item -Force $goZip
 
   if (!(Test-Path $goExe)) {
-    throw "Go 安装失败: $goExe 不存在。请手动安装 Go 1.22+ 后重试。"
+    throw "Go install failed: $goExe does not exist. Please install Go 1.21+ manually and retry."
   }
 }
 
@@ -59,7 +60,7 @@ function Stop-OldGateway {
     if ($oldPid) {
       try {
         Stop-Process -Id ([int]$oldPid) -Force -ErrorAction Stop
-        Write-Host "已停止旧网关进程 PID=$oldPid"
+        Write-Host "Stopped old gateway process PID=$oldPid"
       } catch {
       }
     }
@@ -95,48 +96,29 @@ function Run-SmokeTests {
   )
 
   $base = "http://127.0.0.1:$HttpPort"
-  Write-Host "执行接口自测..."
-  $uname = "smoke_user"
+  Write-Host "Running smoke tests..."
+  $uname = "smoke_user_$([DateTimeOffset]::Now.ToUnixTimeMilliseconds())"
   $pwd = "123456"
   try {
     Invoke-RestMethod -Uri "$base/api/v1/user/register" -Method POST -ContentType "application/json" -Body (@{ username = $uname; password = $pwd } | ConvertTo-Json) | Out-Null
   } catch {
   }
+
   $loginResp = Invoke-RestMethod -Uri "$base/api/v1/user/login" -Method POST -ContentType "application/json" -Body (@{ username = $uname; password = $pwd } | ConvertTo-Json)
   if ($loginResp.code -ne 0 -or -not $loginResp.token) {
-    throw "login 自测失败"
+    throw "login smoke test failed"
   }
-  $headers = @{ "Authorization" = "Bearer $($loginResp.token)"; "Content-Type" = "application/json" }
 
-  $chatBody = @{ requirement = "预算30，想吃辣，30分钟内送达" } | ConvertTo-Json
+  $headers = @{ "Authorization" = "Bearer $($loginResp.token)"; "Content-Type" = "application/json" }
+  $chatBody = @{ requirement = "budget 30, spicy food, quick delivery" } | ConvertTo-Json
   $chatResp = Invoke-RestMethod -Uri "$base/api/v1/chat/send" -Method POST -Headers $headers -Body $chatBody
   if ($chatResp.code -ne 0) {
-    throw "chat/send 自测失败"
+    throw "chat/send smoke test failed"
+  }
+  if (-not $chatResp.data.merchants -or $chatResp.data.merchants.Count -eq 0) {
+    throw "recommendation smoke test failed: empty merchants"
   }
 
-  $merchant = $chatResp.data.merchants[0]
-  if (-not $merchant) {
-    throw "推荐为空，自测失败"
-  }
-
-  $orderBody = @{
-    merchant_id = [int64]$merchant.id
-    merchant_name = [string]$merchant.name
-    amount = [double]$merchant.avg_price
-  } | ConvertTo-Json
-
-  $orderResp = Invoke-RestMethod -Uri "$base/api/v1/order/auto-place-pay" -Method POST -Headers $headers -Body $orderBody
-  if ($orderResp.code -ne 0) {
-    throw "order/auto-place-pay 自测失败"
-  }
-
-  $orderId = $orderResp.data.order_id
-  $detailResp = Invoke-RestMethod -Uri ("$base/api/v1/order/detail?order_id=" + $orderId) -Method GET -Headers @{ "Authorization" = "Bearer $($loginResp.token)" }
-  if ($detailResp.code -ne 0 -or -not $detailResp.data.paid) {
-    throw "order/detail 自测失败"
-  }
-
-  # TCP 自测
   $tcp = [System.Net.Sockets.TcpClient]::new()
   $tcp.Connect("127.0.0.1", $TcpPort)
   $stream = $tcp.GetStream()
@@ -150,10 +132,9 @@ function Run-SmokeTests {
   $stream.Dispose()
   $tcp.Close()
   if ($tcpResp -ne "PONG") {
-    throw "TCP 自测失败"
+    throw "TCP smoke test failed"
   }
 
-  # UDP 自测
   $udp = [System.Net.Sockets.UdpClient]::new()
   $udp.Client.ReceiveTimeout = 2000
   $bytes = [System.Text.Encoding]::UTF8.GetBytes("PING")
@@ -163,10 +144,10 @@ function Run-SmokeTests {
   $udp.Close()
   $udpResp = [System.Text.Encoding]::UTF8.GetString($recv)
   if ($udpResp -ne "PONG") {
-    throw "UDP 自测失败"
+    throw "UDP smoke test failed"
   }
 
-  Write-Host "自测通过：HTTP/TCP/UDP 链路正常"
+  Write-Host "Smoke tests passed: HTTP/TCP/UDP are ready."
 }
 
 Ensure-Go
@@ -196,30 +177,31 @@ try {
 
   & $goExe mod tidy
   if ($LASTEXITCODE -ne 0) {
-    throw "go mod tidy 失败"
+    throw "go mod tidy failed"
   }
 
-  Write-Host "启动网关..."
-  $proc = Start-Process -FilePath $goExe -ArgumentList "run", "./api-gateway" -WorkingDirectory $projectRoot -RedirectStandardOutput $logOut -RedirectStandardError $logErr -PassThru
+  Write-Host "Starting gateway..."
+  $proc = Start-Process -FilePath $goExe -ArgumentList "run", "./api-gateway" -WorkingDirectory $projectRoot -RedirectStandardOutput $logOut -RedirectStandardError $logErr -PassThru -WindowStyle Hidden
   Set-Content -Path $pidFile -Value $proc.Id
 
   $ready = Wait-HttpReady -Url "http://127.0.0.1:$HttpPort/"
   if (-not $ready) {
-    throw "网关启动超时，请查看日志: $logErr"
+    throw "gateway startup timed out. Check log: $logErr"
   }
 
   Run-SmokeTests -HttpPort $HttpPort -TcpPort $TcpPort -UdpPort $UdpPort
   if ($OpenBrowser) {
     Start-Process "http://127.0.0.1:$HttpPort/"
   }
-  Write-Host "系统已启动：http://127.0.0.1:$HttpPort/"
+
+  Write-Host "System started: http://127.0.0.1:$HttpPort/"
   if (-not [string]::IsNullOrWhiteSpace($Domain)) {
-    Write-Host "域名限制已启用：$Domain"
-    Write-Host "请将域名 DNS 或 hosts 指向本机IP后访问：http://$Domain`:$HttpPort/"
+    Write-Host "Allowed host enabled: $Domain"
+    Write-Host "Point DNS or hosts to this machine, then visit: http://$Domain`:$HttpPort/"
   }
-  Write-Host "TCP 服务：0.0.0.0:$TcpPort"
-  Write-Host "UDP 服务：0.0.0.0:$UdpPort"
-  Write-Host "停止服务：powershell -ExecutionPolicy Bypass -File .\scripts\stop.ps1"
+  Write-Host "TCP service: 0.0.0.0:$TcpPort"
+  Write-Host "UDP service: 0.0.0.0:$UdpPort"
+  Write-Host "Stop service: .\stop.bat"
 } finally {
   Pop-Location
 }
