@@ -239,7 +239,7 @@ async function saveCurrentLocation(loc, source = "location_page") {
 }
 
 async function queryCurrentLocation() {
-  const resp = await fetch("/api/v1/user/location/current?with_nearby=1&radius=3000&limit=8", {
+  const resp = await fetch("/api/v1/user/location/current?with_nearby=1&radius=3000&limit=100", {
     headers: authHeaders(),
   });
   const data = await resp.json();

@@ -17,30 +17,32 @@ import (
 )
 
 type amapNearbyFood struct {
-	POIID          string  `json:"poi_id"`
-	Name           string  `json:"name"`
-	Address        string  `json:"address"`
-	DistanceMeters int     `json:"distance_meters"`
-	Latitude       float64 `json:"latitude"`
-	Longitude      float64 `json:"longitude"`
-	Category       string  `json:"category"`
-	Rating         float64 `json:"rating"`
-	AvgPrice       float64 `json:"avg_price"`
+	POIID          string   `json:"poi_id"`
+	Name           string   `json:"name"`
+	Address        string   `json:"address"`
+	DistanceMeters int      `json:"distance_meters"`
+	Latitude       float64  `json:"latitude"`
+	Longitude      float64  `json:"longitude"`
+	Category       string   `json:"category"`
+	Rating         float64  `json:"rating"`
+	AvgPrice       float64  `json:"avg_price"`
 	Dishes         []string `json:"dishes"`
 }
 
+type amapPoi struct {
+	ID       string                 `json:"id"`
+	Name     string                 `json:"name"`
+	Address  string                 `json:"address"`
+	Distance string                 `json:"distance"`
+	Type     string                 `json:"type"`
+	Location string                 `json:"location"`
+	Business map[string]interface{} `json:"business"`
+}
+
 type amapAroundResponse struct {
-	Status string `json:"status"`
-	Info   string `json:"info"`
-	Pois   []struct {
-		ID       string                 `json:"id"`
-		Name     string                 `json:"name"`
-		Address  string                 `json:"address"`
-		Distance string                 `json:"distance"`
-		Type     string                 `json:"type"`
-		Location string                 `json:"location"`
-		Business map[string]interface{} `json:"business"`
-	} `json:"pois"`
+	Status string    `json:"status"`
+	Info   string    `json:"info"`
+	Pois   []amapPoi `json:"pois"`
 }
 
 func getAmapAPIKey() string {
@@ -101,12 +103,73 @@ func fetchNearbyFoodsFromAmap(ctx context.Context, latitude, longitude float64, 
 		radius = 3000
 	}
 	if limit <= 0 {
-		limit = 8
+		limit = 100
 	}
-	if limit > 20 {
-		limit = 20
+	if limit > 100 {
+		limit = 100
 	}
 
+	client := &http.Client{Timeout: 8 * time.Second}
+	items := make([]amapNearbyFood, 0, limit)
+	seen := map[string]struct{}{}
+	const pageSize = 25
+	pageNum := 1
+	for len(items) < limit {
+		need := limit - len(items)
+		size := pageSize
+		if need < size {
+			size = need
+		}
+		pois, err := fetchAmapAroundPage(ctx, client, apiKey, latitude, longitude, radius, size, pageNum)
+		if err != nil {
+			if len(items) > 0 {
+				return items, nil
+			}
+			return nil, err
+		}
+		if len(pois) == 0 {
+			break
+		}
+		added := 0
+		for _, poi := range pois {
+			id := strings.TrimSpace(poi.ID)
+			if id != "" {
+				if _, ok := seen[id]; ok {
+					continue
+				}
+				seen[id] = struct{}{}
+			}
+			lon, lat := parseAmapLocation(poi.Location)
+			dist, _ := strconv.Atoi(strings.TrimSpace(poi.Distance))
+			rating, avgPrice, tags := parseAmapBusiness(poi.Business)
+			category := strings.TrimSpace(strings.Split(poi.Type, ";")[0])
+			dishes := extractDishes(poi.Name, poi.Type, tags)
+			items = append(items, amapNearbyFood{
+				POIID:          id,
+				Name:           strings.TrimSpace(poi.Name),
+				Address:        strings.TrimSpace(poi.Address),
+				DistanceMeters: dist,
+				Latitude:       lat,
+				Longitude:      lon,
+				Category:       category,
+				Rating:         rating,
+				AvgPrice:       avgPrice,
+				Dishes:         dishes,
+			})
+			added++
+			if len(items) >= limit {
+				break
+			}
+		}
+		if added == 0 || len(pois) < size {
+			break
+		}
+		pageNum++
+	}
+	return items, nil
+}
+
+func fetchAmapAroundPage(ctx context.Context, client *http.Client, apiKey string, latitude, longitude float64, radius, pageSize, pageNum int) ([]amapPoi, error) {
 	params := url.Values{}
 	params.Set("key", apiKey)
 	params.Set("location", fmt.Sprintf("%.6f,%.6f", longitude, latitude))
@@ -114,15 +177,14 @@ func fetchNearbyFoodsFromAmap(ctx context.Context, latitude, longitude float64, 
 	params.Set("types", "050000")
 	params.Set("radius", strconv.Itoa(radius))
 	params.Set("sortrule", "distance")
-	params.Set("page_size", strconv.Itoa(limit))
-	params.Set("page_num", "1")
+	params.Set("page_size", strconv.Itoa(pageSize))
+	params.Set("page_num", strconv.Itoa(pageNum))
 	params.Set("show_fields", "business")
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://restapi.amap.com/v5/place/around?"+params.Encode(), nil)
 	if err != nil {
 		return nil, err
 	}
-	client := &http.Client{Timeout: 8 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
 		return nil, err
@@ -139,28 +201,7 @@ func fetchNearbyFoodsFromAmap(ctx context.Context, latitude, longitude float64, 
 	if out.Status != "1" {
 		return nil, fmt.Errorf("amap api failed: %s", out.Info)
 	}
-
-	items := make([]amapNearbyFood, 0, len(out.Pois))
-	for _, poi := range out.Pois {
-		lon, lat := parseAmapLocation(poi.Location)
-		dist, _ := strconv.Atoi(strings.TrimSpace(poi.Distance))
-		rating, avgPrice, tags := parseAmapBusiness(poi.Business)
-		category := strings.TrimSpace(strings.Split(poi.Type, ";")[0])
-		dishes := extractDishes(poi.Name, poi.Type, tags)
-		items = append(items, amapNearbyFood{
-			POIID:          strings.TrimSpace(poi.ID),
-			Name:           strings.TrimSpace(poi.Name),
-			Address:        strings.TrimSpace(poi.Address),
-			DistanceMeters: dist,
-			Latitude:       lat,
-			Longitude:      lon,
-			Category:       category,
-			Rating:         rating,
-			AvgPrice:       avgPrice,
-			Dishes:         dishes,
-		})
-	}
-	return items, nil
+	return out.Pois, nil
 }
 
 func parseAmapBusiness(biz map[string]interface{}) (float64, float64, string) {

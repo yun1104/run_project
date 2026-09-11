@@ -247,12 +247,12 @@ func main() {
 					if r, err := strconv.Atoi(strings.TrimSpace(c.Query("radius"))); err == nil && r > 0 {
 						radius = r
 					}
-					limit := 8
+					limit := 100
 					if l, err := strconv.Atoi(strings.TrimSpace(c.Query("limit"))); err == nil && l > 0 {
 						limit = l
 					}
-					if limit > 20 {
-						limit = 20
+					if limit > 100 {
+						limit = 100
 					}
 					if nearby, err := fetchNearbyFoodsFromAmap(c.Request.Context(), rec.Latitude, rec.Longitude, radius, limit); err == nil {
 						data["nearby_foods"] = nearby
@@ -297,11 +297,11 @@ func main() {
 					c.JSON(http.StatusBadGateway, gin.H{"code": 502, "message": err.Error()})
 					return
 				}
-				nearbyFoods := make([]amapNearbyFood, 0, 8)
+				nearbyFoods := make([]amapNearbyFood, 0, 100)
 				candidates := resp.Merchants
 				if v, ok := locStore.Load(userID); ok {
 					rec := v.(locRecord)
-					if foods, ferr := fetchNearbyFoodsFromAmap(c.Request.Context(), rec.Latitude, rec.Longitude, 3000, 8); ferr == nil && len(foods) > 0 {
+					if foods, ferr := fetchNearbyFoodsFromAmap(c.Request.Context(), rec.Latitude, rec.Longitude, 3000, 100); ferr == nil && len(foods) > 0 {
 						nearbyFoods = foods
 						candidates = mergeCandidatesWithNearby(foods)
 					}
