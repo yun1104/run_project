@@ -59,11 +59,38 @@ function Wait-Port {
   return $false
 }
 
+function Ensure-MySQL {
+  if (Test-TcpPort -TargetHost "127.0.0.1" -Port 3306) { return }
+
+  $mysqlDir = Join-Path $appRoot ".tools\mysql\mariadb-11.4.2-winx64"
+  $mysqlExe = Join-Path $mysqlDir "bin\mariadbd.exe"
+  if (!(Test-Path $mysqlExe)) {
+    throw "MariaDB not found: $mysqlExe"
+  }
+
+  $mysqlDataDir = Join-Path $runtimeDir "mysql-data"
+  $mysqlIni = Join-Path $mysqlDataDir "my.ini"
+  New-Item -ItemType Directory -Force -Path $mysqlDataDir | Out-Null
+  @"
+[mysqld]
+datadir=$($mysqlDataDir -replace '\\','/')
+port=3306
+[client]
+port=3306
+plugin-dir=$((Join-Path $mysqlDir 'lib\plugin') -replace '\\','/')
+"@ | Set-Content -Path $mysqlIni
+  Start-Process -FilePath $mysqlExe -ArgumentList "--defaults-file=$mysqlIni" -WorkingDirectory $appRoot -WindowStyle Hidden | Out-Null
+  if (!(Wait-Port -TargetHost "127.0.0.1" -Port 3306 -TimeoutSec 30)) {
+    throw "MySQL startup failed"
+  }
+}
+
 if (Test-Path $stopScript) {
   & powershell -ExecutionPolicy Bypass -File $stopScript | Out-Null
 }
 
 $goExe = Resolve-GoExe
+Ensure-MySQL
 $env:GOPROXY = "https://goproxy.cn,direct"
 $env:GOSUMDB = "sum.golang.google.cn"
 $env:USER_GRPC_ADDR = $UserGrpcAddr

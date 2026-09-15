@@ -3,6 +3,7 @@ import os
 import sys
 import urllib.request
 import re
+from pathlib import Path
 
 # 强制 UTF-8，避免 Windows 默认 GBK 导致中文乱码
 if hasattr(sys.stdout, "reconfigure"):
@@ -35,9 +36,18 @@ def _extract_json_text(content: str) -> str:
 
 
 def _model_cfg():
-    api_key = os.getenv("MODELSCOPE_API_KEY", "").strip() or "ms-dd4cdb20-b7a7-4e39-95ea-ae1b5f412d4d"
-    base_url = os.getenv("MODELSCOPE_BASE_URL", "").strip() or "https://api-inference.modelscope.cn/v1"
-    model = os.getenv("MODELSCOPE_MODEL", "").strip() or "Qwen/Qwen3-30B-A3B-Instruct-2507"
+    env_values = {}
+    env_file = Path(__file__).resolve().parents[1] / ".env"
+    if env_file.exists():
+        for line in env_file.read_text(encoding="utf-8").splitlines():
+            if "=" in line and not line.startswith("#"):
+                key, value = line.split("=", 1)
+                env_values[key.strip()] = value.strip()
+    api_key = os.getenv("MODELSCOPE_API_KEY", "").strip() or env_values.get("MODELSCOPE_API_KEY", "")
+    if not api_key:
+        raise RuntimeError("missing MODELSCOPE_API_KEY")
+    base_url = os.getenv("MODELSCOPE_BASE_URL", "").strip() or env_values.get("MODELSCOPE_BASE_URL", "") or "https://api-inference.modelscope.cn/v1"
+    model = os.getenv("MODELSCOPE_MODEL", "").strip() or env_values.get("MODELSCOPE_MODEL", "") or "Qwen/Qwen3.8-Flash-Next"
     return api_key, base_url, model
 
 
