@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>我的订单 - AI 外卖助手</title>
+  <link rel="stylesheet" href="/assets/app.css?v=20260317" />
+</head>
+<body>
+  <div class="layout">
+    <aside class="sidebar">
+      <div class="brand">AI 外卖助手</div>
+      <button id="backHomeBtn" class="new-chat" type="button">返回聊天</button>
+      <button id="refreshBtn" class="new-chat secondary" type="button">刷新订单</button>
+      <button id="accountBtn" class="new-chat secondary" type="button">账号设置</button>
+      <button id="logoutBtn" class="new-chat secondary danger" type="button">退出登录</button>
+    </aside>
+
+    <main class="chat-area account-main">
+      <header class="chat-header">我的订单</header>
+      <section class="message-list">
+        <div class="account-wrap">
+          <section class="account-card">
+            <h3 id="orderTitle">订单列表</h3>
+            <div id="orderList" class="order-list"></div>
+          </section>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="toast" class="toast hidden"></div>
+  <div id="locationPermModal" class="pref-modal hidden">
+    <div class="pref-panel">
+      <h3>是否允许获取你的位置？</h3>
+      <div class="account-line">用于推荐附近美食。</div>
+      <div class="pref-actions">
+        <button id="locAllowOnceBtn" class="ghost-btn" type="button">仅本次允许</button>
+        <button id="locAllowAlwaysBtn" class="primary-btn" type="button">仅使用时允许</button>
+        <button id="locDenyBtn" class="ghost-btn" type="button">不允许</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/assets/orders.js?v=20260314b"></script>
+</body>
+</html>

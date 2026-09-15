@@ -30,6 +30,9 @@ outputs/
 outputs/~$*
 ~$*
 
+# Browser/test tooling
+.playwright-mcp/
+
 # OS/editor metadata
 .DS_Store
 Thumbs.db

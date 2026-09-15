@@ -1,7 +1,7 @@
 # 项目结构说明
 
 ```
-meituan-ai-agent/
+xiangchisha/
 ├── api-gateway/                    # API网关
 │   └── main.go                     # 网关入口，路由转发、限流
 │
@@ -175,4 +175,6 @@ meituan-ai-agent/
      5. 确认
   → Kafka(order.paid) 
   → notification-service通知用户
+
+
 ```

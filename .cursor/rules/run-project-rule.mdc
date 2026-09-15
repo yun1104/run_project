@@ -5,3 +5,11 @@ alwaysApply: true
 
 使用go语言开发
 使用UTF-8编码
+
+## 上下文压缩
+- 了解项目时优先引用 context-compact.md，避免加载 PROJECT_STRUCTURE.md、项目理解.md 等长文档
+- 仅在需要细节时再读取完整文档
+
+## Playwright MCP 自测
+- 用户要求用 Playwright MCP 自测时，优先使用 call_mcp_tool（server: user-playwright）访问 http://127.0.0.1:8080
+- 若 call_mcp_tool 不可用，回退到 go run scripts/e2e_*.go 或 playwright-go 脚本
