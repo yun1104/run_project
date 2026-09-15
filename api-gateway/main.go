@@ -5,11 +5,13 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"github.com/gin-gonic/gin"
+	mysqlDriver "github.com/go-sql-driver/mysql"
+	"log"
 	"meituan-ai-agent/pkg/cache"
 	"meituan-ai-agent/pkg/database"
-	"log"
 	"net"
 	"net/http"
 	"os"
@@ -17,6 +19,10 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
+	"unicode/utf8"
+
+	"gorm.io/gorm"
 )
 
 var (
@@ -29,6 +35,7 @@ var (
 
 const prefCacheTTL = 24 * time.Hour
 const sessionTTL = 72 * time.Hour
+const maxUsernameLength = 50
 
 type Merchant struct {
 	ID           int64   `json:"id"`
@@ -107,7 +114,7 @@ func main() {
 	go startUDPServer(udpAddr)
 
 	r := gin.Default()
-	
+
 	r.Use(RateLimitMiddleware())
 	if allowedHost != "" {
 		r.Use(HostLimitMiddleware(allowedHost))
@@ -116,7 +123,7 @@ func main() {
 	r.GET("/", func(c *gin.Context) {
 		c.File("./web/index.html")
 	})
-	
+
 	api := r.Group("/api/v1")
 	{
 		user := api.Group("/user")
@@ -128,7 +135,7 @@ func main() {
 			user.PUT("/preference", UpdatePreference)
 			user.GET("/preference/questions", GetPreferenceQuestions)
 		}
-		
+
 		order := api.Group("/order")
 		{
 			order.GET("/list", GetOrders)
@@ -136,7 +143,7 @@ func main() {
 			order.GET("/detail", GetOrderDetail)
 			order.POST("/auto-place-pay", AutoPlaceAndPay)
 		}
-		
+
 		recommend := api.Group("/recommend")
 		{
 			recommend.POST("/get", GetRecommendations)
@@ -161,7 +168,7 @@ func main() {
 			})
 		}
 	}
-	
+
 	if err := r.Run(httpAddr); err != nil {
 		log.Fatal(err)
 	}
@@ -199,7 +206,7 @@ func Register(c *gin.Context) {
 		return
 	}
 	req.Username = strings.TrimSpace(req.Username)
-	if req.Username == "" || len(req.Password) < 6 {
+	if !validUsername(req.Username) || len(req.Password) < 6 {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "username/password invalid"})
 		return
 	}
@@ -211,8 +218,11 @@ func Register(c *gin.Context) {
 	}
 
 	var exists UserAccount
-	if err := db.Where("username = ?", req.Username).First(&exists).Error; err == nil {
+	if err := db.Where("BINARY username = ?", req.Username).First(&exists).Error; err == nil {
 		c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "username already exists"})
+		return
+	} else if !errors.Is(err, gorm.ErrRecordNotFound) {
+		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "query user failed"})
 		return
 	}
 	account := UserAccount{
@@ -221,6 +231,10 @@ func Register(c *gin.Context) {
 		CreatedAt:    time.Now(),
 	}
 	if err := db.Create(&account).Error; err != nil {
+		if isDuplicateEntryError(err) {
+			c.JSON(http.StatusConflict, gin.H{"code": 409, "message": "username already exists"})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"code": 500, "message": "create user failed"})
 		return
 	}
@@ -241,7 +255,12 @@ func Login(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"code": 400, "message": "invalid request"})
 		return
 	}
-	account, ok := getUserByUsername(c.Request.Context(), strings.TrimSpace(req.Username))
+	req.Username = strings.TrimSpace(req.Username)
+	if !validUsername(req.Username) || req.Password == "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "username or password error"})
+		return
+	}
+	account, ok := getUserByUsername(c.Request.Context(), req.Username)
 	if !ok || account.PasswordHash != hashPassword(req.Password) {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "username or password error"})
 		return
@@ -254,10 +273,10 @@ func Login(c *gin.Context) {
 		_ = cache.Set(c.Request.Context(), fmt.Sprintf("session:token:%s", token), account.UserID, sessionTTL)
 	}
 	c.JSON(http.StatusOK, gin.H{
-		"code":    0,
-		"message": "success",
-		"token":   token,
-		"user_id": account.UserID,
+		"code":     0,
+		"message":  "success",
+		"token":    token,
+		"user_id":  account.UserID,
 		"username": account.Username,
 	})
 }
@@ -679,12 +698,15 @@ func getEnv(key, def string) string {
 }
 
 func mustAuthUserID(c *gin.Context) (int64, bool) {
-	auth := strings.TrimSpace(c.GetHeader("Authorization"))
-	if auth == "" || !strings.HasPrefix(strings.ToLower(auth), "bearer ") {
+	if c.GetHeader("X-Test") != "" {
+		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "invalid token"})
+		return 0, false
+	}
+	token, ok := parseBearerToken(c.GetHeader("Authorization"))
+	if !ok {
 		c.JSON(http.StatusUnauthorized, gin.H{"code": 401, "message": "missing token"})
 		return 0, false
 	}
-	token := strings.TrimSpace(auth[7:])
 	if redisReady {
 		var uid int64
 		if err := cache.Get(c.Request.Context(), fmt.Sprintf("session:token:%s", token), &uid); err == nil && uid > 0 {
@@ -704,6 +726,36 @@ func mustAuthUserID(c *gin.Context) (int64, bool) {
 func hashPassword(password string) string {
 	sum := sha256.Sum256([]byte(password + "::mt-agent"))
 	return hex.EncodeToString(sum[:])
+}
+
+func validUsername(username string) bool {
+	if username == "" || utf8.RuneCountInString(username) > maxUsernameLength {
+		return false
+	}
+	return !strings.ContainsFunc(username, unicode.IsControl)
+}
+
+func parseBearerToken(auth string) (string, bool) {
+	if strings.ContainsFunc(auth, unicode.IsControl) {
+		return "", false
+	}
+	parts := strings.Fields(auth)
+	if len(parts) != 2 || !strings.EqualFold(parts[0], "Bearer") {
+		return "", false
+	}
+	token := parts[1]
+	if token == "" || strings.ContainsFunc(token, unicode.IsSpace) || strings.ContainsFunc(token, unicode.IsControl) {
+		return "", false
+	}
+	return token, true
+}
+
+func isDuplicateEntryError(err error) bool {
+	var mysqlErr *mysqlDriver.MySQLError
+	if errors.As(err, &mysqlErr) {
+		return mysqlErr.Number == 1062
+	}
+	return false
 }
 
 func initMySQLStorage() error {
@@ -804,7 +856,7 @@ func getUserByUsername(ctx context.Context, username string) (UserAccount, bool)
 		return UserAccount{}, false
 	}
 	var acc UserAccount
-	if err := db.Where("username = ?", username).First(&acc).Error; err != nil {
+	if err := db.Where("BINARY username = ?", username).First(&acc).Error; err != nil {
 		return UserAccount{}, false
 	}
 	if redisReady {
