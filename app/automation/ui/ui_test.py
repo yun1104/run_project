@@ -14,10 +14,38 @@ class TestUIFlow(unittest.TestCase):
         options.add_argument("--disable-gpu")
         self.driver = webdriver.Chrome(options=options)
         self.wait = WebDriverWait(self.driver, 15)
+        self.llm_wait = WebDriverWait(self.driver, 90)
         self.base_url = os.getenv("BASE_URL", "http://127.0.0.1:8080")
 
     def tearDown(self):
         self.driver.quit()
+
+    def _modal_open(self, driver, eid):
+        el = driver.find_element(By.ID, eid)
+        return "hidden" not in (el.get_attribute("class") or "")
+
+    def _close_blocking_modals(self, driver):
+        deadline = time.time() + 25
+        idle = 0
+        while time.time() < deadline:
+            if self._modal_open(driver, "loginLocationPermModal"):
+                driver.find_element(By.ID, "loginLocDenyBtn").click()
+                idle = 0
+                time.sleep(0.3)
+                continue
+            if self._modal_open(driver, "prefModal"):
+                opts = driver.find_elements(By.CSS_SELECTOR, "#prefOptions .pref-option")
+                if opts:
+                    opts[0].click()
+                driver.find_element(By.ID, "prefNextBtn").click()
+                idle = 0
+                time.sleep(0.4)
+                continue
+            idle += 1
+            if idle >= 4:
+                return
+            time.sleep(0.4)
+        raise AssertionError("blocking modal not closed")
 
     def test_m1_e2e_031_032_033_ui_flow(self):
         driver = self.driver
@@ -42,13 +70,11 @@ class TestUIFlow(unittest.TestCase):
         driver.find_element(By.ID, "authLoginBtn").click()
         self.wait.until(lambda d: "hidden" in d.find_element(By.ID, "authModal").get_attribute("class"))
 
-        deny = driver.find_elements(By.ID, "loginLocDenyBtn")
-        if deny and deny[0].is_displayed():
-            deny[0].click()
+        self._close_blocking_modals(driver)
 
         driver.find_element(By.ID, "promptInput").send_keys("预算30元，想吃辣")
         driver.find_element(By.ID, "sendBtn").click()
-        self.wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".cards .card")) > 0)
+        self.llm_wait.until(lambda d: len(d.find_elements(By.CSS_SELECTOR, ".cards .card")) > 0)
 
         driver.get(f"{self.base_url}/account")
         self.wait.until(lambda d: d.find_element(By.ID, "usernameText").text.strip() not in ("", "-"))

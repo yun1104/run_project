@@ -69,7 +69,7 @@ def _call_modelscope(messages, temperature=0.2):
             "Authorization": "Bearer " + api_key,
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, timeout=120) as resp:
         body = resp.read().decode("utf-8", errors="ignore")
     parsed = json.loads(body)
     choices = parsed.get("choices", [])

@@ -56,6 +56,9 @@ if errorlevel 1 exit /b 1
 "%GOEXE%" test ./automation/interface -v -count=1
 if errorlevel 1 exit /b 1
 
+"%GOEXE%" test ./automation/ai -v -count=1 -timeout 20m
+if errorlevel 1 exit /b 1
+
 python .\automation\ui\ui_test.py
 set RESULT=%ERRORLEVEL%
 popd
